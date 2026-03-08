@@ -28,7 +28,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
         <div className="p-5 border-b border-border-subtle">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center text-xl"
-              style={{ color: '#fbbf24' }}>
+              style={{ filter: 'sepia(1) saturate(4) hue-rotate(5deg) brightness(1.15)' }}>
               🦞
             </div>
             <div>

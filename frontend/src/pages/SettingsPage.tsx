@@ -56,7 +56,7 @@ const SettingsPage: FC = () => {
     <div className="max-w-2xl mx-auto space-y-8 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-text-primary">Settings</h1>
-        <p className="text-text-secondary mt-1">Appoint an OpenClaw instance as the Nano Claw assistant</p>
+        <p className="text-text-secondary mt-1">Appoint an OpenClaw instance as the Claw AI Assistant</p>
       </div>
 
       {/* Assistant config */}
@@ -67,7 +67,7 @@ const SettingsPage: FC = () => {
             <Brain className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h2 className="font-semibold text-text-primary">Nano Claw Assistant</h2>
+            <h2 className="font-semibold text-text-primary">Claw AI Assistant</h2>
             <p className="text-sm text-text-secondary">
               Appoint one of your registered claws to power the chat assistant.
               ClawManager will send a system prompt guiding it to act as your platform helper.
@@ -108,6 +108,17 @@ const SettingsPage: FC = () => {
             <p className="text-xs text-text-muted mt-1">
               The selected claw will receive a ClawManager system prompt and serve as the assistant.
             </p>
+            {/* Network requirement notice */}
+            <div className="mt-2 flex items-start gap-2 rounded-xl border border-accent-warning/30 bg-accent-warning/5 px-3 py-2.5">
+              <span className="mt-0.5 text-accent-warning shrink-0">⚠️</span>
+              <p className="text-xs text-accent-warning leading-relaxed">
+                <span className="font-semibold">Network requirement:</span> The Claw AI Assistant works
+                only when ClawManager can reach the appointed claw over the network. Deploy ClawManager
+                on the <span className="font-semibold">same device or cloud environment</span> as the
+                OpenClaw instance, or ensure the claw's URL is reachable from wherever ClawManager is
+                hosted. Without network access the assistant falls back to Mock Mode.
+              </p>
+            </div>
           </div>
 
           {/* Current status */}

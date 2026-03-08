@@ -15,7 +15,7 @@ const NanoClawAssistant: FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: "Hi! I'm Nano Claw 🐾 Your AI assistant for managing OpenClaw instances. How can I help you today?",
+      content: "Hi! I'm your Claw AI Assistant 🐾 Here to help you manage OpenClaw instances. How can I help you today?",
       timestamp: new Date(),
     },
   ])

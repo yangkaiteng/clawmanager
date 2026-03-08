@@ -1,4 +1,4 @@
-# 🦀 ClawManager
+# 🦞 ClawManager
 
 **OpenClaw AI Management Platform** — A beautiful, modern web application for managing multiple OpenClaw AI agent instances.
 
@@ -11,7 +11,7 @@
 - 🤖 **Claw Management** — Add, edit, delete and health-check OpenClaw AI instances
 - 📚 **Template Marketplace** — Browse, create, like, and apply prompt templates to any claw
 - 🗂️ **Workspaces** — Organize skills and memories per task context
-- 🧠 **Nano Claw Assistant** — Floating AI chat panel powered by your configured claw (or mock)
+- 🧠 **Claw AI Assistant** — Floating AI chat panel powered by your configured claw (or mock)
 - 📊 **Dashboard** — Real-time stats, health bars, token usage, quick actions
 - 🎨 **Dark Neon UI** — Glassmorphism, neon glow effects, smooth animations
 
@@ -67,7 +67,7 @@ clawmanager/
 | GET | `/api/templates` | List templates (with category filter) |
 | POST | `/api/templates/{id}/like` | Like a template |
 | GET | `/api/workspaces` | List workspaces with skills & memories |
-| POST | `/api/assistant/chat` | Chat with Nano Claw |
+| POST | `/api/assistant/chat` | Chat with Claw AI Assistant |
 | GET | `/api/stats` | Dashboard stats |
 
 Full interactive docs at **http://localhost:8000/docs**
@@ -94,8 +94,27 @@ Or use the dev deploy script:
 
 ## 📝 Configuration
 
-Configure the Nano Claw assistant via **Settings → Nano Claw Assistant** in the UI,
+Configure the Claw AI assistant via **Settings → Claw AI Assistant** in the UI,
 or set `VITE_API_URL` in the frontend environment.
+
+> **Network requirement:** The Claw AI Assistant only works when ClawManager can reach the
+> appointed OpenClaw instance over the network. Run ClawManager on the **same device or cloud
+> environment** as the OpenClaw instance, or make sure the claw's URL is network-accessible
+> from where ClawManager is hosted. If the claw is unreachable, the assistant automatically
+> falls back to Mock Mode.
+
+## 💻 Compatibility
+
+ClawManager runs on **Linux, macOS, and Windows** — any platform that supports Docker:
+
+| Platform | Docker Compose | Local Dev |
+|----------|---------------|-----------|
+| Linux | ✅ Native | ✅ Python 3.11 + Node 18+ |
+| macOS | ✅ Docker Desktop / OrbStack | ✅ Python 3.11 + Node 18+ |
+| Windows | ✅ Docker Desktop (WSL 2 backend) | ✅ Python 3.11 + Node 18+ (WSL or native) |
+
+For local dev without Docker on Windows, run the backend inside WSL 2 or use Git Bash / PowerShell —
+all Python and Node commands are cross-platform.
 
 ## License
 
