@@ -1,0 +1,45 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clawmanager-backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=sqlite:////app/data/clawmanager.db
+    volumes:
+      - clawmanager-data:/app/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - clawmanager-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: clawmanager-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - clawmanager-net
+
+volumes:
+  clawmanager-data:
+    driver: local
+
+networks:
+  clawmanager-net:
+    driver: bridge
