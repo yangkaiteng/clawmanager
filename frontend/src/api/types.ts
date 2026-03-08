@@ -42,6 +42,8 @@ export interface Skill {
   prompt: string
   workspace_id: number
   created_at: string | null
+  updated_at: string | null
+  added_by_ai: boolean
 }
 
 export interface Memory {
@@ -51,6 +53,8 @@ export interface Memory {
   workspace_id: number | null
   importance: number
   created_at: string | null
+  updated_at: string | null
+  added_by_ai: boolean
 }
 
 export interface AssistantConfig {
@@ -116,9 +120,40 @@ export interface SkillCreate {
   workspace_id: number
 }
 
+export interface SkillUpdate {
+  name?: string
+  description?: string
+  prompt?: string
+}
+
 export interface MemoryCreate {
   content: string
   claw_id?: number | null
   workspace_id?: number | null
   importance?: number
+}
+
+export interface MemoryUpdate {
+  content?: string
+  importance?: number
+}
+
+export interface SkillVersion {
+  id: number
+  skill_id: number
+  version_number: number
+  name: string
+  description: string | null
+  prompt: string
+  created_at: string | null
+}
+
+export interface WorkspaceSnapshot {
+  id: number
+  workspace_id: number
+  version_number: number
+  name: string
+  description: string | null
+  claw_id: number | null
+  snapshot_at: string | null
 }

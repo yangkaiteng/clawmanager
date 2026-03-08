@@ -1,10 +1,10 @@
 import { useState, useEffect, type FC } from 'react'
 import {
   Plus, FolderKanban, ChevronDown, ChevronRight, Trash2, Edit2,
-  Zap, Brain, X, AlertCircle, Server,
+  Zap, Brain, X, AlertCircle, Server, History, Camera, RotateCcw, Bot,
 } from 'lucide-react'
 import { workspacesApi, skillsApi, memoriesApi, clawsApi } from '../api/client'
-import type { Workspace, Skill, Memory, Claw } from '../api/types'
+import type { Workspace, Skill, Memory, Claw, SkillVersion, WorkspaceSnapshot } from '../api/types'
 
 // ── Modal helpers ─────────────────────────────────────────────────────────────
 
@@ -127,6 +127,177 @@ const SkillModal: FC<{
   )
 }
 
+// ── AI badge ──────────────────────────────────────────────────────────────────
+
+const AIBadge: FC = () => (
+  <span
+    className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md font-medium shrink-0"
+    style={{ background: 'rgba(6,182,212,0.15)', color: '#06b6d4', border: '1px solid rgba(6,182,212,0.3)' }}
+  >
+    <Bot className="w-3 h-3" />AI Added
+  </span>
+)
+
+// ── Skill history panel ───────────────────────────────────────────────────────
+
+const SkillHistoryPanel: FC<{
+  skill: Skill
+  onClose: () => void
+  onRestored: (s: Skill) => void
+}> = ({ skill, onClose, onRestored }) => {
+  const [versions, setVersions] = useState<SkillVersion[]>([])
+  const [loading, setLoading] = useState(true)
+  const [restoring, setRestoring] = useState<number | null>(null)
+
+  useEffect(() => {
+    skillsApi.getVersions(skill.id)
+      .then(setVersions)
+      .finally(() => setLoading(false))
+  }, [skill.id])
+
+  const handleRestore = async (vid: number) => {
+    setRestoring(vid)
+    try {
+      const updated = await skillsApi.restoreVersion(skill.id, vid)
+      onRestored(updated)
+      onClose()
+    } finally {
+      setRestoring(null)
+    }
+  }
+
+  return (
+    <div className="mt-2 p-3 bg-bg-elevated rounded-xl border border-border-subtle space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
+          <History className="w-3.5 h-3.5 text-accent-purple" />Version History
+        </span>
+        <button onClick={onClose} className="btn-ghost p-1"><X className="w-3 h-3" /></button>
+      </div>
+      {loading ? (
+        <p className="text-xs text-text-muted">Loading…</p>
+      ) : versions.length === 0 ? (
+        <p className="text-xs text-text-muted">No versions saved yet. Edit the skill to create the first version.</p>
+      ) : (
+        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+          {versions.map(v => (
+            <div key={v.id} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-bg-primary border border-border-subtle">
+              <div className="flex-1 min-w-0">
+                <span className="text-xs text-text-secondary">
+                  v{v.version_number} — {v.name}
+                </span>
+                {v.created_at && (
+                  <span className="text-xs text-text-muted ml-2">
+                    {new Date(v.created_at).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => handleRestore(v.id)}
+                disabled={restoring === v.id}
+                className="text-xs btn-secondary py-1 px-2 shrink-0 flex items-center gap-1"
+              >
+                <RotateCcw className="w-3 h-3" />
+                {restoring === v.id ? '…' : 'Restore'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Snapshots panel ───────────────────────────────────────────────────────────
+
+const SnapshotsPanel: FC<{
+  workspace: Workspace
+  onClose: () => void
+  onRestored: (w: Workspace) => void
+}> = ({ workspace, onClose, onRestored }) => {
+  const [snapshots, setSnapshots] = useState<WorkspaceSnapshot[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [restoring, setRestoring] = useState<number | null>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    workspacesApi.getSnapshots(workspace.id)
+      .then(setSnapshots)
+      .finally(() => setLoading(false))
+  }, [workspace.id])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const snap = await workspacesApi.saveSnapshot(workspace.id)
+      setSnapshots(prev => [snap, ...prev])
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleRestore = async (sid: number) => {
+    setRestoring(sid)
+    try {
+      const updated = await workspacesApi.restoreSnapshot(workspace.id, sid)
+      onRestored(updated)
+      onClose()
+    } finally {
+      setRestoring(null)
+    }
+  }
+
+  return (
+    <div className="mt-3 p-3 bg-bg-elevated rounded-xl border border-border-subtle space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
+          <Camera className="w-3.5 h-3.5 text-accent-warning" />Snapshots
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="text-xs btn-primary py-1 px-2.5 flex items-center gap-1"
+          >
+            <Camera className="w-3 h-3" />
+            {saving ? 'Saving…' : 'Save Snapshot'}
+          </button>
+          <button onClick={onClose} className="btn-ghost p-1"><X className="w-3 h-3" /></button>
+        </div>
+      </div>
+      {loading ? (
+        <p className="text-xs text-text-muted">Loading…</p>
+      ) : snapshots.length === 0 ? (
+        <p className="text-xs text-text-muted">No snapshots yet. Click "Save Snapshot" to capture the current workspace config.</p>
+      ) : (
+        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+          {snapshots.map(s => (
+            <div key={s.id} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-bg-primary border border-border-subtle">
+              <div className="flex-1 min-w-0">
+                <span className="text-xs text-text-secondary">v{s.version_number} — {s.name}</span>
+                {s.snapshot_at && (
+                  <span className="text-xs text-text-muted ml-2">
+                    {new Date(s.snapshot_at).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => handleRestore(s.id)}
+                disabled={restoring === s.id}
+                className="text-xs btn-secondary py-1 px-2 shrink-0 flex items-center gap-1"
+              >
+                <RotateCcw className="w-3 h-3" />
+                {restoring === s.id ? '…' : 'Restore'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Workspace row ─────────────────────────────────────────────────────────────
 
 const WorkspaceRow: FC<{
@@ -136,17 +307,31 @@ const WorkspaceRow: FC<{
   onEdit: (w: Workspace) => void
   onSkillCreated: (s: Skill, wsId: number) => void
   onSkillDeleted: (skillId: number, wsId: number) => void
+  onSkillUpdated: (s: Skill, wsId: number) => void
   onMemoryCreated: (m: Memory, wsId: number) => void
   onMemoryDeleted: (memId: number, wsId: number) => void
-}> = ({ workspace, onDelete, onEdit, onSkillCreated, onSkillDeleted, onMemoryCreated, onMemoryDeleted }) => {
+  onMemoryUpdated: (m: Memory, wsId: number) => void
+  onWorkspaceUpdated: (w: Workspace) => void
+}> = ({ workspace, onDelete, onEdit, onSkillCreated, onSkillDeleted, onSkillUpdated, onMemoryCreated, onMemoryDeleted, onMemoryUpdated, onWorkspaceUpdated }) => {
   const [expanded, setExpanded] = useState(false)
   const [showAddSkill, setShowAddSkill] = useState(false)
+  const [editingSkill, setEditingSkill] = useState<Skill | null>(null)
   const [showAddMemory, setShowAddMemory] = useState(false)
   const [memoryForm, setMemoryForm] = useState({ content: '', importance: 3, claw_id: null as number | null })
+  const [editingMemory, setEditingMemory] = useState<Memory | null>(null)
+  const [editMemoryForm, setEditMemoryForm] = useState({ content: '', importance: 3 })
+  const [skillHistoryId, setSkillHistoryId] = useState<number | null>(null)
+  const [showSnapshots, setShowSnapshots] = useState(false)
 
   const handleAddSkill = async (form: { name: string; description: string; prompt: string }) => {
     const s = await skillsApi.create({ ...form, workspace_id: workspace.id })
     onSkillCreated(s, workspace.id)
+  }
+
+  const handleEditSkill = async (form: { name: string; description: string; prompt: string }) => {
+    if (!editingSkill) return
+    const s = await skillsApi.update(editingSkill.id, form)
+    onSkillUpdated(s, workspace.id)
   }
 
   const handleAddMemory = async (e: React.FormEvent) => {
@@ -160,6 +345,19 @@ const WorkspaceRow: FC<{
     onMemoryCreated(m, workspace.id)
     setMemoryForm({ content: '', importance: 3, claw_id: null })
     setShowAddMemory(false)
+  }
+
+  const startEditMemory = (m: Memory) => {
+    setEditingMemory(m)
+    setEditMemoryForm({ content: m.content, importance: m.importance })
+  }
+
+  const handleSaveMemory = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingMemory) return
+    const updated = await memoriesApi.update(editingMemory.id, editMemoryForm)
+    onMemoryUpdated(updated, workspace.id)
+    setEditingMemory(null)
   }
 
   const importanceDots = (n: number) =>
@@ -198,12 +396,28 @@ const WorkspaceRow: FC<{
             }
           </button>
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowSnapshots(s => !s)}
+              className="btn-ghost p-2"
+              title="Snapshots"
+            >
+              <Camera className="w-3.5 h-3.5" />
+            </button>
             <button onClick={() => onEdit(workspace)} className="btn-ghost p-2"><Edit2 className="w-3.5 h-3.5" /></button>
             <button onClick={() => onDelete(workspace.id)} className="btn-danger p-2"><Trash2 className="w-3.5 h-3.5" /></button>
           </div>
         </div>
         {workspace.description && (
           <p className="text-sm text-text-secondary mt-3 pl-12">{workspace.description}</p>
+        )}
+        {showSnapshots && (
+          <div className="pl-12 mt-2">
+            <SnapshotsPanel
+              workspace={workspace}
+              onClose={() => setShowSnapshots(false)}
+              onRestored={onWorkspaceUpdated}
+            />
+          </div>
         )}
       </div>
 
@@ -226,18 +440,53 @@ const WorkspaceRow: FC<{
             ) : (
               <div className="space-y-2">
                 {workspace.skills.map(s => (
-                  <div key={s.id} className="flex items-start justify-between gap-3 p-3 bg-bg-elevated rounded-xl border border-border-subtle">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-text-primary">{s.name}</p>
-                      {s.description && <p className="text-xs text-text-muted mt-0.5">{s.description}</p>}
-                      <p className="text-xs text-text-muted font-mono mt-1 line-clamp-2">{s.prompt}</p>
+                  <div key={s.id} className="p-3 bg-bg-elevated rounded-xl border border-border-subtle">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-medium text-text-primary">{s.name}</p>
+                          {s.added_by_ai && <AIBadge />}
+                        </div>
+                        {s.description && <p className="text-xs text-text-muted mt-0.5">{s.description}</p>}
+                        <p className="text-xs text-text-muted font-mono mt-1 line-clamp-2">{s.prompt}</p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => setSkillHistoryId(prev => prev === s.id ? null : s.id)}
+                          className="btn-ghost p-1.5"
+                          title="Version history"
+                        >
+                          <History className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => setEditingSkill(s)}
+                          className="btn-ghost p-1.5"
+                          title="Edit skill"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await skillsApi.delete(s.id)
+                              onSkillDeleted(s.id, workspace.id)
+                            } catch (err) {
+                              alert(err instanceof Error ? err.message : 'Failed to delete skill')
+                            }
+                          }}
+                          className="btn-danger p-1.5"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
-                    <button
-                      onClick={async () => { await skillsApi.delete(s.id); onSkillDeleted(s.id, workspace.id) }}
-                      className="btn-danger p-1.5 shrink-0"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                    {skillHistoryId === s.id && (
+                      <SkillHistoryPanel
+                        skill={s}
+                        onClose={() => setSkillHistoryId(null)}
+                        onRestored={updated => { onSkillUpdated(updated, workspace.id); setSkillHistoryId(null) }}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
@@ -288,20 +537,67 @@ const WorkspaceRow: FC<{
             ) : (
               <div className="space-y-2">
                 {workspace.memories.map(m => (
-                  <div key={m.id} className="flex items-start justify-between gap-3 p-3 bg-bg-elevated rounded-xl border border-border-subtle">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-text-primary">{m.content}</p>
-                      <div className="flex items-center gap-2 mt-1.5">
-                        <div className="flex items-center gap-0.5">{importanceDots(m.importance)}</div>
-                        <span className="text-xs text-text-muted">importance {m.importance}/5</span>
+                  <div key={m.id} className="p-3 bg-bg-elevated rounded-xl border border-border-subtle">
+                    {editingMemory?.id === m.id ? (
+                      <form onSubmit={handleSaveMemory} className="space-y-2">
+                        <textarea
+                          className="input resize-none text-sm"
+                          rows={2}
+                          value={editMemoryForm.content}
+                          onChange={e => setEditMemoryForm(p => ({ ...p, content: e.target.value }))}
+                          required
+                        />
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs text-text-muted">Importance</label>
+                          <input
+                            type="range" min={1} max={5}
+                            value={editMemoryForm.importance}
+                            onChange={e => setEditMemoryForm(p => ({ ...p, importance: Number(e.target.value) }))}
+                            className="flex-1"
+                          />
+                          <span className="text-xs text-accent-warning font-medium w-4">{editMemoryForm.importance}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => setEditingMemory(null)} className="btn-secondary text-xs py-1.5 flex-1">Cancel</button>
+                          <button type="submit" className="btn-primary text-xs py-1.5 flex-1">Save</button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start gap-2 flex-wrap">
+                            <p className="text-sm text-text-primary flex-1">{m.content}</p>
+                            {m.added_by_ai && <AIBadge />}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1.5">
+                            <div className="flex items-center gap-0.5">{importanceDots(m.importance)}</div>
+                            <span className="text-xs text-text-muted">importance {m.importance}/5</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => startEditMemory(m)}
+                            className="btn-ghost p-1.5"
+                            title="Edit memory"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await memoriesApi.delete(m.id)
+                                onMemoryDeleted(m.id, workspace.id)
+                              } catch (err) {
+                                alert(err instanceof Error ? err.message : 'Failed to delete memory')
+                              }
+                            }}
+                            className="btn-danger p-1.5"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                    <button
-                      onClick={async () => { await memoriesApi.delete(m.id); onMemoryDeleted(m.id, workspace.id) }}
-                      className="btn-danger p-1.5 shrink-0"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -316,6 +612,15 @@ const WorkspaceRow: FC<{
           title="Add Skill"
           onClose={() => setShowAddSkill(false)}
           onSave={handleAddSkill}
+        />
+      )}
+      {editingSkill && (
+        <SkillModal
+          workspaceId={workspace.id}
+          title="Edit Skill"
+          initial={{ name: editingSkill.name, description: editingSkill.description ?? '', prompt: editingSkill.prompt }}
+          onClose={() => setEditingSkill(null)}
+          onSave={handleEditSkill}
         />
       )}
     </div>
@@ -395,8 +700,11 @@ const WorkspacesPage: FC = () => {
               onEdit={w => setEditingWs(w)}
               onSkillCreated={(s, wsId) => mutate(wsId, w => ({ ...w, skills: [...w.skills, s] }))}
               onSkillDeleted={(skillId, wsId) => mutate(wsId, w => ({ ...w, skills: w.skills.filter(s => s.id !== skillId) }))}
+              onSkillUpdated={(s, wsId) => mutate(wsId, w => ({ ...w, skills: w.skills.map(sk => sk.id === s.id ? s : sk) }))}
               onMemoryCreated={(m, wsId) => mutate(wsId, w => ({ ...w, memories: [...w.memories, m] }))}
               onMemoryDeleted={(memId, wsId) => mutate(wsId, w => ({ ...w, memories: w.memories.filter(m => m.id !== memId) }))}
+              onMemoryUpdated={(m, wsId) => mutate(wsId, w => ({ ...w, memories: w.memories.map(me => me.id === m.id ? m : me) }))}
+              onWorkspaceUpdated={updated => setWorkspaces(prev => prev.map(w => w.id === updated.id ? updated : w))}
             />
           ))}
         </div>

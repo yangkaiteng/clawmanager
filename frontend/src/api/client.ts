@@ -2,6 +2,7 @@ import type {
   Claw, Template, Workspace, Skill, Memory,
   AssistantConfig, Stats, HealthCheckResult, ChatResponse,
   ClawCreate, TemplateCreate, WorkspaceCreate, SkillCreate, MemoryCreate,
+  SkillUpdate, MemoryUpdate, SkillVersion, WorkspaceSnapshot,
 } from './types'
 
 const API_BASE = '/api'
@@ -62,6 +63,11 @@ export const workspacesApi = {
   update: (id: number, data: Partial<WorkspaceCreate>) =>
     request<Workspace>(`/workspaces/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => request<{ message: string }>(`/workspaces/${id}`, { method: 'DELETE' }),
+  getSnapshots: (id: number) => request<WorkspaceSnapshot[]>(`/workspaces/${id}/snapshots`),
+  saveSnapshot: (id: number) =>
+    request<WorkspaceSnapshot>(`/workspaces/${id}/snapshots`, { method: 'POST' }),
+  restoreSnapshot: (wsId: number, sid: number) =>
+    request<Workspace>(`/workspaces/${wsId}/snapshots/${sid}/restore`, { method: 'POST' }),
 }
 
 // ── Skills ─────────────────────────────────────────────────────────────────
@@ -71,9 +77,12 @@ export const skillsApi = {
     request<Skill[]>(`/skills${workspaceId ? `?workspace_id=${workspaceId}` : ''}`),
   create: (data: SkillCreate) =>
     request<Skill>('/skills', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: number, data: Partial<SkillCreate>) =>
+  update: (id: number, data: SkillUpdate) =>
     request<Skill>(`/skills/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => request<{ message: string }>(`/skills/${id}`, { method: 'DELETE' }),
+  getVersions: (id: number) => request<SkillVersion[]>(`/skills/${id}/versions`),
+  restoreVersion: (skillId: number, versionId: number) =>
+    request<Skill>(`/skills/${skillId}/versions/${versionId}/restore`, { method: 'POST' }),
 }
 
 // ── Memories ───────────────────────────────────────────────────────────────
@@ -87,6 +96,8 @@ export const memoriesApi = {
   },
   create: (data: MemoryCreate) =>
     request<Memory>('/memories', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: number, data: MemoryUpdate) =>
+    request<Memory>(`/memories/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => request<{ message: string }>(`/memories/${id}`, { method: 'DELETE' }),
 }
 

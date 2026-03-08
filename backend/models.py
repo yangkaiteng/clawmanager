@@ -69,6 +69,7 @@ class Workspace(Base):
     claw = relationship("Claw", back_populates="workspaces")
     skills = relationship("Skill", back_populates="workspace", cascade="all, delete-orphan")
     memories = relationship("Memory", back_populates="workspace")
+    snapshots = relationship("WorkspaceSnapshot", back_populates="workspace", cascade="all, delete-orphan")
 
 
 class Skill(Base):
@@ -80,8 +81,11 @@ class Skill(Base):
     prompt = Column(Text, nullable=False)
     workspace_id = Column(Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+    added_by_ai = Column(Boolean, default=False)
 
     workspace = relationship("Workspace", back_populates="skills")
+    versions = relationship("SkillVersion", back_populates="skill", cascade="all, delete-orphan")
 
 
 class Memory(Base):
@@ -93,9 +97,39 @@ class Memory(Base):
     workspace_id = Column(Integer, ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True)
     importance = Column(Integer, default=3)  # 1-5
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+    added_by_ai = Column(Boolean, default=False)
 
     claw = relationship("Claw", back_populates="memories")
     workspace = relationship("Workspace", back_populates="memories")
+
+
+class SkillVersion(Base):
+    __tablename__ = "skill_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    skill_id = Column(Integer, ForeignKey("skills.id", ondelete="CASCADE"), nullable=False)
+    version_number = Column(Integer, nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    prompt = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    skill = relationship("Skill", back_populates="versions")
+
+
+class WorkspaceSnapshot(Base):
+    __tablename__ = "workspace_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    version_number = Column(Integer, nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    claw_id = Column(Integer, nullable=True)
+    snapshot_at = Column(DateTime, default=datetime.utcnow)
+
+    workspace = relationship("Workspace", back_populates="snapshots")
 
 
 class AssistantConfig(Base):

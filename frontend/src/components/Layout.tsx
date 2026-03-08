@@ -2,7 +2,7 @@ import { type FC } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Server, BookTemplate, FolderKanban,
-  Settings, Zap, Github,
+  Settings, Github,
 } from 'lucide-react'
 import NanoClawAssistant from './NanoClawAssistant'
 
@@ -27,9 +27,9 @@ const Layout: FC<LayoutProps> = ({ children }) => {
         {/* Logo */}
         <div className="p-5 border-b border-border-subtle">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center"
-              style={{ background: 'linear-gradient(135deg, #6366f1, #06b6d4)' }}>
-              <Zap className="w-5 h-5 text-white" />
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center text-xl"
+              style={{ color: '#fbbf24' }}>
+              🦞
             </div>
             <div>
               <h1 className="font-bold text-text-primary tracking-tight">ClawManager</h1>

@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from models import (
     Base, engine, get_db,
-    Claw, Template, Workspace, Skill, Memory, AssistantConfig
+    Claw, Template, Workspace, Skill, Memory, AssistantConfig,
+    SkillVersion, WorkspaceSnapshot
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -251,6 +252,34 @@ async def lifespan(app: FastAPI):
                 logger.info("Migrated assistant_config table to claw_id schema")
     except Exception as e:
         logger.warning(f"Migration check skipped: {e}")
+
+    # Migrate: add new columns to skills and memories if missing
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        if "skills" in inspector.get_table_names():
+            skill_cols = [c["name"] for c in inspector.get_columns("skills")]
+            with engine.connect() as conn:
+                if "added_by_ai" not in skill_cols:
+                    conn.execute(text("ALTER TABLE skills ADD COLUMN added_by_ai BOOLEAN DEFAULT 0"))
+                    logger.info("Added added_by_ai column to skills")
+                if "updated_at" not in skill_cols:
+                    conn.execute(text("ALTER TABLE skills ADD COLUMN updated_at DATETIME"))
+                    logger.info("Added updated_at column to skills")
+                conn.commit()
+        if "memories" in inspector.get_table_names():
+            memory_cols = [c["name"] for c in inspector.get_columns("memories")]
+            with engine.connect() as conn:
+                if "added_by_ai" not in memory_cols:
+                    conn.execute(text("ALTER TABLE memories ADD COLUMN added_by_ai BOOLEAN DEFAULT 0"))
+                    logger.info("Added added_by_ai column to memories")
+                if "updated_at" not in memory_cols:
+                    conn.execute(text("ALTER TABLE memories ADD COLUMN updated_at DATETIME"))
+                    logger.info("Added updated_at column to memories")
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"Column migration skipped: {e}")
+
     Base.metadata.create_all(bind=engine)
     seed_database()
     yield
@@ -334,6 +363,25 @@ class MemoryCreate(BaseModel):
     importance: int = 3
 
 
+class MemoryUpdate(BaseModel):
+    content: Optional[str] = None
+    importance: Optional[int] = None
+
+
+class AssistantMemoryCreate(BaseModel):
+    content: str
+    claw_id: Optional[int] = None
+    workspace_id: Optional[int] = None
+    importance: int = 3
+
+
+class AssistantSkillCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    prompt: str
+    workspace_id: int
+
+
 class AssistantConfigUpdate(BaseModel):
     claw_id: Optional[int] = None
     name: Optional[str] = None
@@ -403,6 +451,8 @@ def skill_to_dict(s: Skill) -> dict:
         "prompt": s.prompt,
         "workspace_id": s.workspace_id,
         "created_at": s.created_at.isoformat() if s.created_at else None,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        "added_by_ai": bool(s.added_by_ai),
     }
 
 
@@ -414,6 +464,32 @@ def memory_to_dict(m: Memory) -> dict:
         "workspace_id": m.workspace_id,
         "importance": m.importance,
         "created_at": m.created_at.isoformat() if m.created_at else None,
+        "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+        "added_by_ai": bool(m.added_by_ai),
+    }
+
+
+def skill_version_to_dict(sv: SkillVersion) -> dict:
+    return {
+        "id": sv.id,
+        "skill_id": sv.skill_id,
+        "version_number": sv.version_number,
+        "name": sv.name,
+        "description": sv.description,
+        "prompt": sv.prompt,
+        "created_at": sv.created_at.isoformat() if sv.created_at else None,
+    }
+
+
+def workspace_snapshot_to_dict(ws: WorkspaceSnapshot) -> dict:
+    return {
+        "id": ws.id,
+        "workspace_id": ws.workspace_id,
+        "version_number": ws.version_number,
+        "name": ws.name,
+        "description": ws.description,
+        "claw_id": ws.claw_id,
+        "snapshot_at": ws.snapshot_at.isoformat() if ws.snapshot_at else None,
     }
 
 
@@ -681,6 +757,60 @@ def delete_workspace(workspace_id: int, db: Session = Depends(get_db)):
     return {"message": "Workspace deleted"}
 
 
+@app.post("/api/workspaces/{workspace_id}/snapshots", status_code=201)
+def save_workspace_snapshot(workspace_id: int, db: Session = Depends(get_db)):
+    w = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not w:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    next_version = db.query(WorkspaceSnapshot).filter(
+        WorkspaceSnapshot.workspace_id == workspace_id
+    ).count() + 1
+    snap = WorkspaceSnapshot(
+        workspace_id=workspace_id,
+        version_number=next_version,
+        name=w.name,
+        description=w.description,
+        claw_id=w.claw_id,
+    )
+    db.add(snap)
+    db.commit()
+    db.refresh(snap)
+    return workspace_snapshot_to_dict(snap)
+
+
+@app.get("/api/workspaces/{workspace_id}/snapshots")
+def list_workspace_snapshots(workspace_id: int, db: Session = Depends(get_db)):
+    w = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not w:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    snaps = (
+        db.query(WorkspaceSnapshot)
+        .filter(WorkspaceSnapshot.workspace_id == workspace_id)
+        .order_by(WorkspaceSnapshot.version_number.desc())
+        .all()
+    )
+    return [workspace_snapshot_to_dict(s) for s in snaps]
+
+
+@app.post("/api/workspaces/{workspace_id}/snapshots/{snapshot_id}/restore")
+def restore_workspace_snapshot(workspace_id: int, snapshot_id: int, db: Session = Depends(get_db)):
+    w = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not w:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    snap = db.query(WorkspaceSnapshot).filter(
+        WorkspaceSnapshot.id == snapshot_id,
+        WorkspaceSnapshot.workspace_id == workspace_id,
+    ).first()
+    if not snap:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    w.name = snap.name
+    w.description = snap.description
+    w.claw_id = snap.claw_id
+    db.commit()
+    db.refresh(w)
+    return workspace_to_dict(w, include_related=True)
+
+
 # ─── Skills ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/skills")
@@ -708,8 +838,20 @@ def update_skill(skill_id: int, body: SkillUpdate, db: Session = Depends(get_db)
     s = db.query(Skill).filter(Skill.id == skill_id).first()
     if not s:
         raise HTTPException(status_code=404, detail="Skill not found")
+    # Save current state as a version before updating
+    next_version = db.query(SkillVersion).filter(SkillVersion.skill_id == skill_id).count() + 1
+    version = SkillVersion(
+        skill_id=s.id,
+        version_number=next_version,
+        name=s.name,
+        description=s.description,
+        prompt=s.prompt,
+    )
+    db.add(version)
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(s, field, value)
+    s.updated_at = datetime.utcnow()
+    # Preserve the original added_by_ai flag; user edits do not change ownership
     db.commit()
     db.refresh(s)
     return skill_to_dict(s)
@@ -723,6 +865,51 @@ def delete_skill(skill_id: int, db: Session = Depends(get_db)):
     db.delete(s)
     db.commit()
     return {"message": "Skill deleted"}
+
+
+@app.get("/api/skills/{skill_id}/versions")
+def list_skill_versions(skill_id: int, db: Session = Depends(get_db)):
+    s = db.query(Skill).filter(Skill.id == skill_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    versions = (
+        db.query(SkillVersion)
+        .filter(SkillVersion.skill_id == skill_id)
+        .order_by(SkillVersion.version_number.desc())
+        .all()
+    )
+    return [skill_version_to_dict(v) for v in versions]
+
+
+@app.post("/api/skills/{skill_id}/versions/{version_id}/restore")
+def restore_skill_version(skill_id: int, version_id: int, db: Session = Depends(get_db)):
+    s = db.query(Skill).filter(Skill.id == skill_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    v = db.query(SkillVersion).filter(
+        SkillVersion.id == version_id, SkillVersion.skill_id == skill_id
+    ).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Version not found")
+    # Save current state as a new version first
+    next_version = db.query(SkillVersion).filter(SkillVersion.skill_id == skill_id).count() + 1
+    current_version = SkillVersion(
+        skill_id=s.id,
+        version_number=next_version,
+        name=s.name,
+        description=s.description,
+        prompt=s.prompt,
+    )
+    db.add(current_version)
+    # Restore from selected version
+    s.name = v.name
+    s.description = v.description
+    s.prompt = v.prompt
+    s.updated_at = datetime.utcnow()
+    s.added_by_ai = False
+    db.commit()
+    db.refresh(s)
+    return skill_to_dict(s)
 
 
 # ─── Memories ─────────────────────────────────────────────────────────────────
@@ -760,6 +947,20 @@ def delete_memory(memory_id: int, db: Session = Depends(get_db)):
     return {"message": "Memory deleted"}
 
 
+@app.put("/api/memories/{memory_id}")
+def update_memory(memory_id: int, body: MemoryUpdate, db: Session = Depends(get_db)):
+    m = db.query(Memory).filter(Memory.id == memory_id).first()
+    if not m:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    for field, value in body.model_dump(exclude_none=True).items():
+        setattr(m, field, value)
+    m.updated_at = datetime.utcnow()
+    # Preserve the original added_by_ai flag; user edits do not change ownership
+    db.commit()
+    db.refresh(m)
+    return memory_to_dict(m)
+
+
 # ─── Assistant ────────────────────────────────────────────────────────────────
 
 # System prompt injected when an appointed claw is used as the ClawManager assistant
@@ -769,7 +970,12 @@ CLAWMANAGER_SYSTEM_PROMPT = (
     "You help users with: monitoring claw health, applying prompt templates, managing workspaces, "
     "skills, and memories, and general guidance about the platform. "
     "Be concise, friendly, and practical. If the user asks about a specific claw or template, "
-    "guide them through the relevant ClawManager UI actions."
+    "guide them through the relevant ClawManager UI actions.\n\n"
+    "MEMORY SAVING: You can save important facts about the user by including special markers in your reply. "
+    "Use the format [SAVE_MEMORY:content:importance] where content is the memory text and importance is 1-5. "
+    "Example: [SAVE_MEMORY:User prefers Python for scripting tasks:4] "
+    "These markers will be automatically stripped from your displayed reply and saved as memories. "
+    "Use this sparingly for genuinely useful persistent facts."
 )
 
 MOCK_RESPONSES = [
@@ -797,11 +1003,17 @@ def _config_response(config: AssistantConfig) -> dict:
 
 @app.post("/api/assistant/chat")
 async def assistant_chat(body: ChatMessage, db: Session = Depends(get_db)):
+    import re
     global _mock_counter
     config = db.query(AssistantConfig).first()
     appointed_claw = None
     if config and config.claw_id:
         appointed_claw = db.query(Claw).filter(Claw.id == config.claw_id).first()
+
+    reply = None
+    model_name = "nano-claw-mock"
+    source = "mock"
+    claw_name = None
 
     if appointed_claw:
         # Strip any existing system messages from history to avoid duplicates,
@@ -828,18 +1040,30 @@ async def assistant_chat(body: ChatMessage, db: Session = Depends(get_db)):
                 ) as resp:
                     result = await resp.json()
                     reply = result["choices"][0]["message"]["content"]
-                    return {
-                        "reply": reply,
-                        "model": appointed_claw.model,
-                        "source": "live",
-                        "claw_name": appointed_claw.name,
-                    }
+                    model_name = appointed_claw.model
+                    source = "live"
+                    claw_name = appointed_claw.name
         except Exception as e:
             logger.warning(f"Assistant proxy failed for claw '{appointed_claw.name}': {e}")
 
-    response = MOCK_RESPONSES[_mock_counter % len(MOCK_RESPONSES)]
-    _mock_counter += 1
-    return {"reply": response, "model": "nano-claw-mock", "source": "mock", "claw_name": None}
+    if reply is None:
+        reply = MOCK_RESPONSES[_mock_counter % len(MOCK_RESPONSES)]
+        _mock_counter += 1
+
+    # Extract and save [SAVE_MEMORY:content:importance] markers
+    # Use non-greedy match so multiple markers in one reply are all captured correctly
+    memory_pattern = re.compile(r'\[SAVE_MEMORY:(.+?):(\d+)\]')
+    for match in memory_pattern.finditer(reply):
+        mem_content = match.group(1).strip()
+        mem_importance = max(1, min(5, int(match.group(2))))
+        if mem_content:
+            m = Memory(content=mem_content, importance=mem_importance, added_by_ai=True)
+            db.add(m)
+    if memory_pattern.search(reply):
+        db.commit()
+    reply = memory_pattern.sub('', reply).strip()
+
+    return {"reply": reply, "model": model_name, "source": source, "claw_name": claw_name}
 
 
 @app.get("/api/assistant/config")
@@ -867,6 +1091,39 @@ def update_assistant_config(body: AssistantConfigUpdate, db: Session = Depends(g
     db.commit()
     db.refresh(config)
     return _config_response(config)
+
+
+@app.post("/api/assistant/memories", status_code=201)
+def assistant_create_memory(body: AssistantMemoryCreate, db: Session = Depends(get_db)):
+    m = Memory(
+        content=body.content,
+        claw_id=body.claw_id,
+        workspace_id=body.workspace_id,
+        importance=body.importance,
+        added_by_ai=True,
+    )
+    db.add(m)
+    db.commit()
+    db.refresh(m)
+    return memory_to_dict(m)
+
+
+@app.post("/api/assistant/skills", status_code=201)
+def assistant_create_skill(body: AssistantSkillCreate, db: Session = Depends(get_db)):
+    workspace = db.query(Workspace).filter(Workspace.id == body.workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    s = Skill(
+        name=body.name,
+        description=body.description,
+        prompt=body.prompt,
+        workspace_id=body.workspace_id,
+        added_by_ai=True,
+    )
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return skill_to_dict(s)
 
 
 # ─── Stats ────────────────────────────────────────────────────────────────────
