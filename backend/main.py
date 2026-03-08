@@ -19,7 +19,7 @@ from models import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-os.makedirs("/app/data", exist_ok=True)
+os.makedirs(os.environ.get("DATA_DIR", "/app/data"), exist_ok=True)
 
 
 def seed_database():
