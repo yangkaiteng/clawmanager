@@ -1,22 +1,22 @@
 import { useState, useEffect, type FC } from 'react'
-import { Brain, Save, CheckCircle, AlertCircle, ExternalLink } from 'lucide-react'
-import { assistantApi } from '../api/client'
-import type { AssistantConfig } from '../api/types'
+import { Brain, Save, CheckCircle, AlertCircle, ExternalLink, ServerCog } from 'lucide-react'
+import { assistantApi, clawsApi } from '../api/client'
+import type { AssistantConfig, Claw } from '../api/types'
 
 const SettingsPage: FC = () => {
   const [config, setConfig] = useState<AssistantConfig | null>(null)
-  const [form, setForm] = useState({ url: '', api_key: '', model: 'gpt-4', name: 'Nano Claw' })
+  const [claws, setClaws] = useState<Claw[]>([])
+  const [form, setForm] = useState({ claw_id: '', name: 'Nano Claw' })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    assistantApi.getConfig().then(c => {
+    Promise.all([assistantApi.getConfig(), clawsApi.list()]).then(([c, cs]) => {
       setConfig(c)
+      setClaws(cs)
       setForm({
-        url: c.url ?? '',
-        api_key: '',
-        model: c.model ?? 'gpt-4',
+        claw_id: c.claw_id != null ? String(c.claw_id) : '',
         name: c.name ?? 'Nano Claw',
       })
     })
@@ -33,9 +33,7 @@ const SettingsPage: FC = () => {
     setSaved(false)
     try {
       const updated = await assistantApi.updateConfig({
-        url: form.url || null,
-        api_key: form.api_key || undefined,
-        model: form.model,
+        claw_id: form.claw_id !== '' ? Number(form.claw_id) : null,
         name: form.name,
       } as Partial<AssistantConfig>)
       setConfig(updated)
@@ -48,11 +46,17 @@ const SettingsPage: FC = () => {
     }
   }
 
+  const statusColor = (status: string | null) => {
+    if (status === 'online') return 'text-accent-success'
+    if (status === 'offline') return 'text-accent-danger'
+    return 'text-text-muted'
+  }
+
   return (
     <div className="max-w-2xl mx-auto space-y-8 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-text-primary">Settings</h1>
-        <p className="text-text-secondary mt-1">Configure your Nano Claw assistant and global preferences</p>
+        <p className="text-text-secondary mt-1">Appoint an OpenClaw instance as the Nano Claw assistant</p>
       </div>
 
       {/* Assistant config */}
@@ -64,7 +68,10 @@ const SettingsPage: FC = () => {
           </div>
           <div>
             <h2 className="font-semibold text-text-primary">Nano Claw Assistant</h2>
-            <p className="text-sm text-text-secondary">Connect to a live OpenClaw instance for the chat panel</p>
+            <p className="text-sm text-text-secondary">
+              Appoint one of your registered claws to power the chat assistant.
+              ClawManager will send a system prompt guiding it to act as your platform helper.
+            </p>
           </div>
         </div>
 
@@ -84,35 +91,23 @@ const SettingsPage: FC = () => {
             <label className="label">Assistant Name</label>
             <input className="input" value={form.name} onChange={set('name')} placeholder="Nano Claw" />
           </div>
+
           <div>
-            <label className="label">OpenClaw URL</label>
-            <input
-              className="input font-mono"
-              value={form.url}
-              onChange={set('url')}
-              placeholder="http://your-openclaw-instance:8080"
-            />
-            <p className="text-xs text-text-muted mt-1">
-              Leave blank to use mock responses for demo purposes
-            </p>
-          </div>
-          <div>
-            <label className="label">API Key</label>
-            <input
-              className="input font-mono"
-              type="password"
-              value={form.api_key}
-              onChange={set('api_key')}
-              placeholder={config?.api_key ? '••••••••• (leave blank to keep current)' : 'sk-…'}
-            />
-          </div>
-          <div>
-            <label className="label">Model</label>
-            <select className="input" value={form.model} onChange={set('model')}>
-              {['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo', 'claude-3-opus', 'claude-3-sonnet', 'llama-3', 'mistral-large'].map(m => (
-                <option key={m} value={m}>{m}</option>
+            <label className="label flex items-center gap-1.5">
+              <ServerCog className="w-3.5 h-3.5" />
+              Appointed Claw
+            </label>
+            <select className="input" value={form.claw_id} onChange={set('claw_id')}>
+              <option value="">— None (Mock Mode) —</option>
+              {claws.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.url}) — {c.status}
+                </option>
               ))}
             </select>
+            <p className="text-xs text-text-muted mt-1">
+              The selected claw will receive a ClawManager system prompt and serve as the assistant.
+            </p>
           </div>
 
           {/* Current status */}
@@ -120,14 +115,23 @@ const SettingsPage: FC = () => {
             <h3 className="text-sm font-medium text-text-primary mb-3">Current Status</h3>
             <div className="space-y-2">
               {[
-                { label: 'Mode', value: config?.url ? '🟢 Live Mode' : '🟡 Mock Mode' },
-                { label: 'URL', value: config?.url || 'Not configured' },
-                { label: 'Model', value: config?.model || 'gpt-4' },
-                { label: 'API Key', value: config?.api_key ? '✓ Configured' : 'Not set' },
-              ].map(({ label, value }) => (
-                <div key={label} className="flex justify-between">
+                {
+                  label: 'Mode',
+                  value: config?.claw_id ? '🟢 Live (Appointed Claw)' : '🟡 Mock Mode',
+                },
+                {
+                  label: 'Appointed Claw',
+                  value: config?.claw_name ?? 'None',
+                  extra: config?.claw_status
+                    ? <span className={`ml-1 ${statusColor(config.claw_status)}`}>({config.claw_status})</span>
+                    : null,
+                },
+              ].map(({ label, value, extra }) => (
+                <div key={label} className="flex justify-between items-center">
                   <span className="text-xs text-text-muted">{label}</span>
-                  <span className="text-xs text-text-secondary font-mono">{value}</span>
+                  <span className="text-xs text-text-secondary font-mono">
+                    {value}{extra}
+                  </span>
                 </div>
               ))}
             </div>

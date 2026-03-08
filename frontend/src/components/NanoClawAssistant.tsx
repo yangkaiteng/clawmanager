@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, type FC } from 'react'
 import { Brain, X, Send, Loader, ChevronDown, Bot, User } from 'lucide-react'
 import { assistantApi } from '../api/client'
+import type { AssistantConfig } from '../api/types'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -10,6 +11,7 @@ interface Message {
 
 const NanoClawAssistant: FC = () => {
   const [open, setOpen] = useState(false)
+  const [config, setConfig] = useState<AssistantConfig | null>(null)
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -22,6 +24,11 @@ const NanoClawAssistant: FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
+  // Load assistant config to display appointed claw name
+  useEffect(() => {
+    assistantApi.getConfig().then(setConfig).catch(() => null)
+  }, [])
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
@@ -31,6 +38,10 @@ const NanoClawAssistant: FC = () => {
       setTimeout(() => inputRef.current?.focus(), 100)
     }
   }, [open])
+
+  const assistantLabel = config?.claw_name
+    ? `${config.claw_name} • ${config.claw_status ?? 'unknown'}`
+    : 'Mock Mode'
 
   const send = async () => {
     const msg = input.trim()
@@ -44,6 +55,8 @@ const NanoClawAssistant: FC = () => {
     try {
       const history = messages.map(m => ({ role: m.role, content: m.content }))
       const res = await assistantApi.chat(msg, history)
+      // Refresh config to keep claw status current
+      assistantApi.getConfig().then(setConfig).catch(() => null)
       setMessages(prev => [
         ...prev,
         { role: 'assistant', content: res.reply, timestamp: new Date() },
@@ -103,8 +116,20 @@ const NanoClawAssistant: FC = () => {
                   <Brain className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-text-primary text-sm">Nano Claw</h3>
-                  <p className="text-xs text-text-muted">AI Assistant • Mock Mode</p>
+                  <h3 className="font-semibold text-text-primary text-sm">
+                    {config?.name ?? 'Nano Claw'}
+                  </h3>
+                  <p className="text-xs text-text-muted">
+                    AI Assistant •{' '}
+                    {config?.claw_name ? (
+                      <span className={
+                        config.claw_status === 'online' ? 'text-accent-success' :
+                        config.claw_status === 'offline' ? 'text-accent-danger' : 'text-text-muted'
+                      }>{assistantLabel}</span>
+                    ) : (
+                      'Mock Mode'
+                    )}
+                  </p>
                 </div>
               </div>
               <button

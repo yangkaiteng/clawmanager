@@ -225,7 +225,7 @@ def seed_database():
             db.add_all(memories)
 
         if db.query(AssistantConfig).count() == 0:
-            db.add(AssistantConfig(name="Nano Claw", url=None, api_key=None, model="gpt-4"))
+            db.add(AssistantConfig(name="Nano Claw", claw_id=None))
 
         db.commit()
         logger.info("Database seeded successfully")
@@ -238,6 +238,19 @@ def seed_database():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Migrate: if assistant_config has the old schema (url column), drop & recreate
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        if "assistant_config" in inspector.get_table_names():
+            cols = [c["name"] for c in inspector.get_columns("assistant_config")]
+            if "url" in cols:
+                with engine.connect() as conn:
+                    conn.execute(text("DROP TABLE assistant_config"))
+                    conn.commit()
+                logger.info("Migrated assistant_config table to claw_id schema")
+    except Exception as e:
+        logger.warning(f"Migration check skipped: {e}")
     Base.metadata.create_all(bind=engine)
     seed_database()
     yield
@@ -322,9 +335,7 @@ class MemoryCreate(BaseModel):
 
 
 class AssistantConfigUpdate(BaseModel):
-    url: Optional[str] = None
-    api_key: Optional[str] = None
-    model: Optional[str] = None
+    claw_id: Optional[int] = None
     name: Optional[str] = None
 
 
@@ -751,6 +762,16 @@ def delete_memory(memory_id: int, db: Session = Depends(get_db)):
 
 # ─── Assistant ────────────────────────────────────────────────────────────────
 
+# System prompt injected when an appointed claw is used as the ClawManager assistant
+CLAWMANAGER_SYSTEM_PROMPT = (
+    "You are the ClawManager assistant, a helpful AI built into the ClawManager platform. "
+    "ClawManager is used to manage multiple OpenClaw AI agent instances from a single dashboard. "
+    "You help users with: monitoring claw health, applying prompt templates, managing workspaces, "
+    "skills, and memories, and general guidance about the platform. "
+    "Be concise, friendly, and practical. If the user asks about a specific claw or template, "
+    "guide them through the relevant ClawManager UI actions."
+)
+
 MOCK_RESPONSES = [
     "I'm Nano Claw, your AI assistant! I can help you manage your OpenClaw instances, apply templates, and monitor system health. What would you like to know?",
     "Your claw instances are looking great! I'd recommend running health checks periodically to ensure optimal performance.",
@@ -763,23 +784,43 @@ MOCK_RESPONSES = [
 _mock_counter = 0
 
 
+def _config_response(config: AssistantConfig) -> dict:
+    claw = config.claw
+    return {
+        "id": config.id,
+        "name": config.name,
+        "claw_id": config.claw_id,
+        "claw_name": claw.name if claw else None,
+        "claw_status": claw.status if claw else None,
+    }
+
+
 @app.post("/api/assistant/chat")
 async def assistant_chat(body: ChatMessage, db: Session = Depends(get_db)):
     global _mock_counter
     config = db.query(AssistantConfig).first()
+    appointed_claw = None
+    if config and config.claw_id:
+        appointed_claw = db.query(Claw).filter(Claw.id == config.claw_id).first()
 
-    if config and config.url:
+    if appointed_claw:
+        # Strip any existing system messages from history to avoid duplicates,
+        # then prepend our ClawManager system prompt as the single system message.
+        filtered_history = [m for m in (body.history or []) if m.get("role") != "system"]
+        messages = [{"role": "system", "content": CLAWMANAGER_SYSTEM_PROMPT}]
+        messages += filtered_history
+        messages.append({"role": "user", "content": body.message})
         payload = {
-            "model": config.model or "gpt-4",
-            "messages": (body.history or []) + [{"role": "user", "content": body.message}],
+            "model": appointed_claw.model or "gpt-4",
+            "messages": messages,
         }
         headers = {"Content-Type": "application/json"}
-        if config.api_key:
-            headers["Authorization"] = f"Bearer {config.api_key}"
+        if appointed_claw.api_key:
+            headers["Authorization"] = f"Bearer {appointed_claw.api_key}"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{config.url.rstrip('/')}/api/chat/completions",
+                    f"{appointed_claw.url.rstrip('/')}/api/chat/completions",
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=30),
@@ -787,13 +828,18 @@ async def assistant_chat(body: ChatMessage, db: Session = Depends(get_db)):
                 ) as resp:
                     result = await resp.json()
                     reply = result["choices"][0]["message"]["content"]
-                    return {"reply": reply, "model": config.model, "source": "live"}
+                    return {
+                        "reply": reply,
+                        "model": appointed_claw.model,
+                        "source": "live",
+                        "claw_name": appointed_claw.name,
+                    }
         except Exception as e:
-            logger.warning(f"Assistant proxy failed: {e}")
+            logger.warning(f"Assistant proxy failed for claw '{appointed_claw.name}': {e}")
 
     response = MOCK_RESPONSES[_mock_counter % len(MOCK_RESPONSES)]
     _mock_counter += 1
-    return {"reply": response, "model": "nano-claw-mock", "source": "mock"}
+    return {"reply": response, "model": "nano-claw-mock", "source": "mock", "claw_name": None}
 
 
 @app.get("/api/assistant/config")
@@ -804,13 +850,7 @@ def get_assistant_config(db: Session = Depends(get_db)):
         db.add(config)
         db.commit()
         db.refresh(config)
-    return {
-        "id": config.id,
-        "url": config.url,
-        "api_key": "***" if config.api_key else None,
-        "model": config.model,
-        "name": config.name,
-    }
+    return _config_response(config)
 
 
 @app.put("/api/assistant/config")
@@ -819,17 +859,14 @@ def update_assistant_config(body: AssistantConfigUpdate, db: Session = Depends(g
     if not config:
         config = AssistantConfig()
         db.add(config)
-    for field, value in body.model_dump(exclude_none=True).items():
-        setattr(config, field, value)
+    # Explicitly allow clearing claw_id to None, but only update other fields when non-None
+    data = body.model_dump()
+    for field, value in data.items():
+        if field == "claw_id" or value is not None:
+            setattr(config, field, value)
     db.commit()
     db.refresh(config)
-    return {
-        "id": config.id,
-        "url": config.url,
-        "api_key": "***" if config.api_key else None,
-        "model": config.model,
-        "name": config.name,
-    }
+    return _config_response(config)
 
 
 # ─── Stats ────────────────────────────────────────────────────────────────────

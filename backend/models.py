@@ -102,7 +102,8 @@ class AssistantConfig(Base):
     __tablename__ = "assistant_config"
 
     id = Column(Integer, primary_key=True, index=True)
-    url = Column(String(512), nullable=True)
-    api_key = Column(String(512), nullable=True)
-    model = Column(String(255), nullable=True, default="gpt-4")
     name = Column(String(255), nullable=True, default="Nano Claw")
+    # References the claw appointed as the assistant; NULL = mock mode
+    claw_id = Column(Integer, ForeignKey("claws.id", ondelete="SET NULL"), nullable=True)
+
+    claw = relationship("Claw")

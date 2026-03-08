@@ -55,10 +55,10 @@ export interface Memory {
 
 export interface AssistantConfig {
   id: number
-  url: string | null
-  api_key: string | null
-  model: string | null
   name: string | null
+  claw_id: number | null
+  claw_name: string | null
+  claw_status: string | null
 }
 
 export interface Stats {
