@@ -41,6 +41,7 @@ class Claw(Base):
 
     workspaces = relationship("Workspace", back_populates="claw", cascade="all, delete-orphan")
     memories = relationship("Memory", back_populates="claw", cascade="all, delete-orphan")
+    config_versions = relationship("ClawConfigVersion", back_populates="claw", cascade="all, delete-orphan")
 
 
 class Template(Base):
@@ -130,6 +131,21 @@ class WorkspaceSnapshot(Base):
     snapshot_at = Column(DateTime, default=datetime.utcnow)
 
     workspace = relationship("Workspace", back_populates="snapshots")
+
+
+class ClawConfigVersion(Base):
+    __tablename__ = "claw_config_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    claw_id = Column(Integer, ForeignKey("claws.id", ondelete="CASCADE"), nullable=False)
+    version_number = Column(Integer, nullable=False)
+    name = Column(String(255), nullable=False)
+    url = Column(String(512), nullable=False)
+    model = Column(String(255), nullable=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    claw = relationship("Claw", back_populates="config_versions")
 
 
 class AssistantConfig(Base):

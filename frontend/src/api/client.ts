@@ -2,7 +2,7 @@ import type {
   Claw, Template, Workspace, Skill, Memory,
   AssistantConfig, Stats, HealthCheckResult, ChatResponse,
   ClawCreate, TemplateCreate, WorkspaceCreate, SkillCreate, MemoryCreate,
-  SkillUpdate, MemoryUpdate, SkillVersion, WorkspaceSnapshot,
+  SkillUpdate, MemoryUpdate, SkillVersion, WorkspaceSnapshot, ClawConfigVersion,
 } from './types'
 
 const API_BASE = '/api'
@@ -37,6 +37,11 @@ export const clawsApi = {
       { method: 'POST', body: JSON.stringify({ template_id: templateId }) }
     ),
   stats: (id: number) => request<Record<string, unknown>>(`/claws/${id}/stats`),
+  listConfigVersions: (id: number) => request<ClawConfigVersion[]>(`/claws/${id}/config-versions`),
+  saveConfigVersion: (id: number) =>
+    request<ClawConfigVersion>(`/claws/${id}/config-versions`, { method: 'POST' }),
+  restoreConfigVersion: (clawId: number, versionId: number) =>
+    request<Claw>(`/claws/${clawId}/config-versions/${versionId}/restore`, { method: 'POST' }),
 }
 
 // ── Templates ──────────────────────────────────────────────────────────────

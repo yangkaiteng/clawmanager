@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from models import (
     Base, engine, get_db,
     Claw, Template, Workspace, Skill, Memory, AssistantConfig,
-    SkillVersion, WorkspaceSnapshot
+    SkillVersion, WorkspaceSnapshot, ClawConfigVersion
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -495,6 +495,19 @@ def workspace_snapshot_to_dict(ws: WorkspaceSnapshot) -> dict:
     }
 
 
+def claw_config_version_to_dict(cv: ClawConfigVersion) -> dict:
+    return {
+        "id": cv.id,
+        "claw_id": cv.claw_id,
+        "version_number": cv.version_number,
+        "name": cv.name,
+        "url": cv.url,
+        "model": cv.model,
+        "description": cv.description,
+        "created_at": cv.created_at.isoformat() if cv.created_at else None,
+    }
+
+
 # ─── Claws ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/claws")
@@ -652,6 +665,67 @@ def claw_stats(claw_id: int, db: Session = Depends(get_db)):
         "status": claw.status,
         "last_health_check": claw.last_health_check.isoformat() if claw.last_health_check else None,
     }
+
+
+@app.get("/api/claws/{claw_id}/config-versions")
+def list_config_versions(claw_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    versions = (
+        db.query(ClawConfigVersion)
+        .filter(ClawConfigVersion.claw_id == claw_id)
+        .order_by(ClawConfigVersion.version_number.desc())
+        .all()
+    )
+    return [claw_config_version_to_dict(v) for v in versions]
+
+
+@app.post("/api/claws/{claw_id}/config-versions", status_code=201)
+def save_config_version(claw_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    last = (
+        db.query(ClawConfigVersion)
+        .filter(ClawConfigVersion.claw_id == claw_id)
+        .order_by(ClawConfigVersion.version_number.desc())
+        .first()
+    )
+    next_version = (last.version_number + 1) if last else 1
+    cv = ClawConfigVersion(
+        claw_id=claw_id,
+        version_number=next_version,
+        name=claw.name,
+        url=claw.url,
+        model=claw.model,
+        description=claw.description,
+    )
+    db.add(cv)
+    db.commit()
+    db.refresh(cv)
+    return claw_config_version_to_dict(cv)
+
+
+@app.post("/api/claws/{claw_id}/config-versions/{version_id}/restore")
+def restore_config_version(claw_id: int, version_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    cv = db.query(ClawConfigVersion).filter(
+        ClawConfigVersion.id == version_id,
+        ClawConfigVersion.claw_id == claw_id,
+    ).first()
+    if not cv:
+        raise HTTPException(status_code=404, detail="Config version not found")
+    claw.name = cv.name
+    claw.url = cv.url
+    claw.model = cv.model
+    claw.description = cv.description
+    claw.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(claw)
+    return claw_to_dict(claw)
 
 
 # ─── Templates ────────────────────────────────────────────────────────────────
@@ -965,8 +1039,12 @@ def update_memory(memory_id: int, body: MemoryUpdate, db: Session = Depends(get_
 
 # ─── Assistant ────────────────────────────────────────────────────────────────
 
-# System prompt injected when an appointed claw is used as the ClawManager assistant
-CLAWMANAGER_SYSTEM_PROMPT = (
+# Load system prompt from clawmanager-skill-prompt.md if available, else use built-in default
+_SKILL_PROMPT_PATHS = [
+    os.path.join(os.path.dirname(__file__), "..", "clawmanager-skill-prompt.md"),
+    "/app/clawmanager-skill-prompt.md",
+]
+_SKILL_PROMPT_FALLBACK = (
     "You are the ClawManager assistant, a helpful AI built into the ClawManager platform. "
     "ClawManager is used to manage multiple OpenClaw AI agent instances from a single dashboard. "
     "You help users with: monitoring claw health, applying prompt templates, managing workspaces, "
@@ -979,6 +1057,29 @@ CLAWMANAGER_SYSTEM_PROMPT = (
     "These markers will be automatically stripped from your displayed reply and saved as memories. "
     "Use this sparingly for genuinely useful persistent facts."
 )
+
+
+def _load_skill_prompt() -> str:
+    for path in _SKILL_PROMPT_PATHS:
+        try:
+            resolved = os.path.realpath(path)
+            if os.path.isfile(resolved):
+                with open(resolved, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        logger.info(f"Loaded skill prompt from {resolved}")
+                        return content
+                    logger.warning(f"Skill prompt file is empty: {resolved}")
+            else:
+                logger.info(f"Skill prompt not found at: {resolved}")
+        except Exception as e:
+            logger.warning(f"Could not read skill prompt from {path}: {e}")
+    logger.info("Using built-in default skill prompt")
+    return _SKILL_PROMPT_FALLBACK
+
+
+# System prompt injected when an appointed claw is used as the ClawManager assistant
+CLAWMANAGER_SYSTEM_PROMPT = _load_skill_prompt()
 
 MOCK_RESPONSES = [
     "I'm Nano Claw, your AI assistant! I can help you manage your OpenClaw instances, apply templates, and monitor system health. What would you like to know?",
@@ -1080,7 +1181,7 @@ def get_assistant_config(db: Session = Depends(get_db)):
 
 
 @app.put("/api/assistant/config")
-def update_assistant_config(body: AssistantConfigUpdate, db: Session = Depends(get_db)):
+async def update_assistant_config(body: AssistantConfigUpdate, db: Session = Depends(get_db)):
     config = db.query(AssistantConfig).first()
     if not config:
         config = AssistantConfig()
@@ -1092,6 +1193,39 @@ def update_assistant_config(body: AssistantConfigUpdate, db: Session = Depends(g
             setattr(config, field, value)
     db.commit()
     db.refresh(config)
+
+    # When a claw is appointed, send the skill prompt to it so it's primed as the assistant
+    if config.claw_id:
+        appointed_claw = db.query(Claw).filter(Claw.id == config.claw_id).first()
+        if appointed_claw:
+            payload = {
+                "model": appointed_claw.model or "gpt-4",
+                "messages": [
+                    {"role": "system", "content": CLAWMANAGER_SYSTEM_PROMPT},
+                    {"role": "user", "content": "You are now configured as the ClawManager AI Assistant. Please acknowledge."},
+                ],
+            }
+            headers = {"Content-Type": "application/json"}
+            if appointed_claw.api_key:
+                headers["Authorization"] = f"Bearer {appointed_claw.api_key}"
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{appointed_claw.url.rstrip('/')}/api/chat/completions",
+                        json=payload,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                        ssl=False,
+                    ) as resp:
+                        result = await resp.json()
+                        logger.info(f"Skill prompt sent to claw '{appointed_claw.name}': acknowledged")
+                        tokens_used = result.get("usage", {}).get("total_tokens", 0)
+                        if tokens_used:
+                            appointed_claw.total_tokens = (appointed_claw.total_tokens or 0) + tokens_used
+                            db.commit()
+            except Exception as e:
+                logger.warning(f"Could not send skill prompt to claw '{appointed_claw.name}': {e}")
+
     return _config_response(config)
 
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, type FC } from 'react'
 import {
   Plus, FolderKanban, ChevronDown, ChevronRight, Trash2, Edit2,
-  Zap, Brain, X, AlertCircle, Server, History, Camera, RotateCcw, Bot,
+  Zap, Brain, X, AlertCircle, Server, History, Camera, RotateCcw, Bot, FileText,
 } from 'lucide-react'
 import { workspacesApi, skillsApi, memoriesApi, clawsApi } from '../api/client'
 import type { Workspace, Skill, Memory, Claw, SkillVersion, WorkspaceSnapshot } from '../api/types'
@@ -298,6 +298,36 @@ const SnapshotsPanel: FC<{
   )
 }
 
+
+// ── Section toggle helper ─────────────────────────────────────────────────────
+
+type WsSectionKey = 'agents' | 'skills' | 'memory' | 'documents'
+
+const SectionToggle: FC<{
+  label: string
+  icon: React.ReactNode
+  count?: number
+  section: WsSectionKey
+  activeSection: WsSectionKey | null
+  onToggle: (s: WsSectionKey) => void
+  accent?: string
+}> = ({ label, icon, count, section, activeSection, onToggle, accent = 'text-text-muted' }) => (
+  <button
+    onClick={() => onToggle(section)}
+    className="flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg hover:bg-bg-elevated transition-colors"
+  >
+    {activeSection === section
+      ? <ChevronDown className="w-3.5 h-3.5 text-text-muted shrink-0" />
+      : <ChevronRight className="w-3.5 h-3.5 text-text-muted shrink-0" />
+    }
+    <span className={`${accent} shrink-0`}>{icon}</span>
+    <span className="text-sm font-medium text-text-primary flex-1">{label}</span>
+    {count !== undefined && (
+      <span className="text-xs text-text-muted bg-bg-elevated px-1.5 py-0.5 rounded-full">{count}</span>
+    )}
+  </button>
+)
+
 // ── Workspace row ─────────────────────────────────────────────────────────────
 
 const WorkspaceRow: FC<{
@@ -314,6 +344,7 @@ const WorkspaceRow: FC<{
   onWorkspaceUpdated: (w: Workspace) => void
 }> = ({ workspace, onDelete, onEdit, onSkillCreated, onSkillDeleted, onSkillUpdated, onMemoryCreated, onMemoryDeleted, onMemoryUpdated, onWorkspaceUpdated }) => {
   const [expanded, setExpanded] = useState(false)
+  const [activeSection, setActiveSection] = useState<WsSectionKey | null>(null)
   const [showAddSkill, setShowAddSkill] = useState(false)
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null)
   const [showAddMemory, setShowAddMemory] = useState(false)
@@ -322,6 +353,9 @@ const WorkspaceRow: FC<{
   const [editMemoryForm, setEditMemoryForm] = useState({ content: '', importance: 3 })
   const [skillHistoryId, setSkillHistoryId] = useState<number | null>(null)
   const [showSnapshots, setShowSnapshots] = useState(false)
+
+  const toggleSection = (s: WsSectionKey) =>
+    setActiveSection(prev => prev === s ? null : s)
 
   const handleAddSkill = async (form: { name: string; description: string; prompt: string }) => {
     const s = await skillsApi.create({ ...form, workspace_id: workspace.id })
@@ -375,7 +409,7 @@ const WorkspaceRow: FC<{
             className="flex items-center gap-3 flex-1 text-left"
           >
             <div className="w-9 h-9 rounded-xl bg-bg-elevated flex items-center justify-center border border-border-subtle">
-              <FolderKanban className="w-4.5 h-4.5 text-accent-warning" style={{ width: '18px', height: '18px' }} />
+              <FolderKanban size={18} className="text-accent-warning" />
             </div>
             <div className="flex-1 min-w-0">
               <h3 className="font-semibold text-text-primary">{workspace.name}</h3>
@@ -421,174 +455,82 @@ const WorkspaceRow: FC<{
         )}
       </div>
 
-      {/* Expanded content */}
+      {/* Expanded tree content */}
       {expanded && (
-        <div className="border-t border-border-subtle">
-          {/* Skills */}
-          <div className="p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Zap className="w-4 h-4 text-accent-purple" />
-                <h4 className="text-sm font-semibold text-text-primary">Skills ({workspace.skills.length})</h4>
-              </div>
-              <button onClick={() => setShowAddSkill(true)} className="text-xs btn-secondary py-1 px-2.5">
-                <Plus className="w-3 h-3" /> Add
-              </button>
+        <div className="border-t border-border-subtle px-4 py-3 space-y-1">
+
+          {/* ── Agents ─────────────────────────────────────────────────────── */}
+          <SectionToggle
+            label="Agents"
+            section="agents"
+            count={0}
+            icon={<Bot className="w-3.5 h-3.5" />}
+            accent="text-accent-cyan"
+            activeSection={activeSection}
+            onToggle={toggleSection}
+          />
+          {activeSection === 'agents' && (
+            <div className="ml-7 pl-3 border-l border-border-subtle py-2">
+              <p className="text-xs text-text-muted italic">
+                Agent configurations will be available here in a future update.
+              </p>
             </div>
-            {workspace.skills.length === 0 ? (
-              <p className="text-xs text-text-muted pl-6">No skills yet</p>
-            ) : (
-              <div className="space-y-2">
-                {workspace.skills.map(s => (
-                  <div key={s.id} className="p-3 bg-bg-elevated rounded-xl border border-border-subtle">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="text-sm font-medium text-text-primary">{s.name}</p>
-                          {s.added_by_ai && <AIBadge />}
-                        </div>
-                        {s.description && <p className="text-xs text-text-muted mt-0.5">{s.description}</p>}
-                        <p className="text-xs text-text-muted font-mono mt-1 line-clamp-2">{s.prompt}</p>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={() => setSkillHistoryId(prev => prev === s.id ? null : s.id)}
-                          className="btn-ghost p-1.5"
-                          title="Version history"
-                        >
-                          <History className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={() => setEditingSkill(s)}
-                          className="btn-ghost p-1.5"
-                          title="Edit skill"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={async () => {
-                            try {
-                              await skillsApi.delete(s.id)
-                              onSkillDeleted(s.id, workspace.id)
-                            } catch (err) {
-                              alert(err instanceof Error ? err.message : 'Failed to delete skill')
-                            }
-                          }}
-                          className="btn-danger p-1.5"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </div>
-                    {skillHistoryId === s.id && (
-                      <SkillHistoryPanel
-                        skill={s}
-                        onClose={() => setSkillHistoryId(null)}
-                        onRestored={updated => { onSkillUpdated(updated, workspace.id); setSkillHistoryId(null) }}
-                      />
-                    )}
-                  </div>
-                ))}
+          )}
+
+          {/* ── Common Skills → Skills for Agents ──────────────────────────── */}
+          <SectionToggle
+            label={`Common Skills (${workspace.skills.length})`}
+            section="skills"
+            icon={<Zap className="w-3.5 h-3.5" />}
+            accent="text-accent-purple"
+            activeSection={activeSection}
+            onToggle={toggleSection}
+          />
+          {activeSection === 'skills' && (
+            <div className="ml-7 pl-3 border-l border-border-subtle space-y-2 py-2">
+              {/* Skills for agents sub-section label */}
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-text-secondary flex items-center gap-1.5">
+                  <Zap className="w-3 h-3 text-accent-purple" />Skills for Agents
+                </span>
+                <button onClick={() => setShowAddSkill(true)} className="text-xs btn-secondary py-1 px-2.5">
+                  <Plus className="w-3 h-3" /> Add
+                </button>
               </div>
-            )}
-          </div>
 
-          {/* Memories */}
-          <div className="p-5 pt-0 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Brain className="w-4 h-4 text-accent-cyan" />
-                <h4 className="text-sm font-semibold text-text-primary">Memories ({workspace.memories.length})</h4>
-              </div>
-              <button onClick={() => setShowAddMemory(!showAddMemory)} className="text-xs btn-secondary py-1 px-2.5">
-                <Plus className="w-3 h-3" /> Add
-              </button>
-            </div>
-
-            {showAddMemory && (
-              <form onSubmit={handleAddMemory} className="p-3 bg-bg-elevated rounded-xl border border-border-subtle space-y-2">
-                <textarea
-                  className="input resize-none text-sm"
-                  rows={2}
-                  value={memoryForm.content}
-                  onChange={e => setMemoryForm(p => ({ ...p, content: e.target.value }))}
-                  placeholder="Memory content…"
-                  required
-                />
-                <div className="flex items-center gap-3">
-                  <label className="text-xs text-text-muted">Importance</label>
-                  <input
-                    type="range" min={1} max={5}
-                    value={memoryForm.importance}
-                    onChange={e => setMemoryForm(p => ({ ...p, importance: Number(e.target.value) }))}
-                    className="flex-1"
-                  />
-                  <span className="text-xs text-accent-warning font-medium w-4">{memoryForm.importance}</span>
-                </div>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => setShowAddMemory(false)} className="btn-secondary text-xs py-1.5 flex-1">Cancel</button>
-                  <button type="submit" className="btn-primary text-xs py-1.5 flex-1">Add Memory</button>
-                </div>
-              </form>
-            )}
-
-            {workspace.memories.length === 0 ? (
-              <p className="text-xs text-text-muted pl-6">No memories yet</p>
-            ) : (
-              <div className="space-y-2">
-                {workspace.memories.map(m => (
-                  <div key={m.id} className="p-3 bg-bg-elevated rounded-xl border border-border-subtle">
-                    {editingMemory?.id === m.id ? (
-                      <form onSubmit={handleSaveMemory} className="space-y-2">
-                        <textarea
-                          className="input resize-none text-sm"
-                          rows={2}
-                          value={editMemoryForm.content}
-                          onChange={e => setEditMemoryForm(p => ({ ...p, content: e.target.value }))}
-                          required
-                        />
-                        <div className="flex items-center gap-3">
-                          <label className="text-xs text-text-muted">Importance</label>
-                          <input
-                            type="range" min={1} max={5}
-                            value={editMemoryForm.importance}
-                            onChange={e => setEditMemoryForm(p => ({ ...p, importance: Number(e.target.value) }))}
-                            className="flex-1"
-                          />
-                          <span className="text-xs text-accent-warning font-medium w-4">{editMemoryForm.importance}</span>
-                        </div>
-                        <div className="flex gap-2">
-                          <button type="button" onClick={() => setEditingMemory(null)} className="btn-secondary text-xs py-1.5 flex-1">Cancel</button>
-                          <button type="submit" className="btn-primary text-xs py-1.5 flex-1">Save</button>
-                        </div>
-                      </form>
-                    ) : (
+              {workspace.skills.length === 0 ? (
+                <p className="text-xs text-text-muted">No skills yet</p>
+              ) : (
+                <div className="space-y-2">
+                  {workspace.skills.map(s => (
+                    <div key={s.id} className="p-3 bg-bg-elevated rounded-xl border border-border-subtle">
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-start gap-2 flex-wrap">
-                            <p className="text-sm text-text-primary flex-1">{m.content}</p>
-                            {m.added_by_ai && <AIBadge />}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-medium text-text-primary">{s.name}</p>
+                            {s.added_by_ai && <AIBadge />}
                           </div>
-                          <div className="flex items-center gap-2 mt-1.5">
-                            <div className="flex items-center gap-0.5">{importanceDots(m.importance)}</div>
-                            <span className="text-xs text-text-muted">importance {m.importance}/5</span>
-                          </div>
+                          {s.description && <p className="text-xs text-text-muted mt-0.5">{s.description}</p>}
+                          <p className="text-xs text-text-muted font-mono mt-1 line-clamp-2">{s.prompt}</p>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button
-                            onClick={() => startEditMemory(m)}
+                            onClick={() => setSkillHistoryId(prev => prev === s.id ? null : s.id)}
                             className="btn-ghost p-1.5"
-                            title="Edit memory"
+                            title="Version history"
                           >
+                            <History className="w-3 h-3" />
+                          </button>
+                          <button onClick={() => setEditingSkill(s)} className="btn-ghost p-1.5" title="Edit skill">
                             <Edit2 className="w-3 h-3" />
                           </button>
                           <button
                             onClick={async () => {
                               try {
-                                await memoriesApi.delete(m.id)
-                                onMemoryDeleted(m.id, workspace.id)
+                                await skillsApi.delete(s.id)
+                                onSkillDeleted(s.id, workspace.id)
                               } catch (err) {
-                                alert(err instanceof Error ? err.message : 'Failed to delete memory')
+                                alert(err instanceof Error ? err.message : 'Failed to delete skill')
                               }
                             }}
                             className="btn-danger p-1.5"
@@ -597,12 +539,151 @@ const WorkspaceRow: FC<{
                           </button>
                         </div>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      {skillHistoryId === s.id && (
+                        <SkillHistoryPanel
+                          skill={s}
+                          onClose={() => setSkillHistoryId(null)}
+                          onRestored={updated => { onSkillUpdated(updated, workspace.id); setSkillHistoryId(null) }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Memory ─────────────────────────────────────────────────────── */}
+          <SectionToggle
+            label={`Memory (${workspace.memories.length})`}
+            section="memory"
+            icon={<Brain className="w-3.5 h-3.5" />}
+            accent="text-accent-cyan"
+            activeSection={activeSection}
+            onToggle={toggleSection}
+          />
+          {activeSection === 'memory' && (
+            <div className="ml-7 pl-3 border-l border-border-subtle space-y-2 py-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-text-secondary">Workspace Memories</span>
+                <button onClick={() => setShowAddMemory(!showAddMemory)} className="text-xs btn-secondary py-1 px-2.5">
+                  <Plus className="w-3 h-3" /> Add
+                </button>
               </div>
-            )}
-          </div>
+
+              {showAddMemory && (
+                <form onSubmit={handleAddMemory} className="p-3 bg-bg-elevated rounded-xl border border-border-subtle space-y-2">
+                  <textarea
+                    className="input resize-none text-sm"
+                    rows={2}
+                    value={memoryForm.content}
+                    onChange={e => setMemoryForm(p => ({ ...p, content: e.target.value }))}
+                    placeholder="Memory content…"
+                    required
+                  />
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-text-muted">Importance</label>
+                    <input
+                      type="range" min={1} max={5}
+                      value={memoryForm.importance}
+                      onChange={e => setMemoryForm(p => ({ ...p, importance: Number(e.target.value) }))}
+                      className="flex-1"
+                    />
+                    <span className="text-xs text-accent-warning font-medium w-4">{memoryForm.importance}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setShowAddMemory(false)} className="btn-secondary text-xs py-1.5 flex-1">Cancel</button>
+                    <button type="submit" className="btn-primary text-xs py-1.5 flex-1">Add Memory</button>
+                  </div>
+                </form>
+              )}
+
+              {workspace.memories.length === 0 ? (
+                <p className="text-xs text-text-muted">No memories yet</p>
+              ) : (
+                <div className="space-y-2">
+                  {workspace.memories.map(m => (
+                    <div key={m.id} className="p-3 bg-bg-elevated rounded-xl border border-border-subtle">
+                      {editingMemory?.id === m.id ? (
+                        <form onSubmit={handleSaveMemory} className="space-y-2">
+                          <textarea
+                            className="input resize-none text-sm"
+                            rows={2}
+                            value={editMemoryForm.content}
+                            onChange={e => setEditMemoryForm(p => ({ ...p, content: e.target.value }))}
+                            required
+                          />
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs text-text-muted">Importance</label>
+                            <input
+                              type="range" min={1} max={5}
+                              value={editMemoryForm.importance}
+                              onChange={e => setEditMemoryForm(p => ({ ...p, importance: Number(e.target.value) }))}
+                              className="flex-1"
+                            />
+                            <span className="text-xs text-accent-warning font-medium w-4">{editMemoryForm.importance}</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button type="button" onClick={() => setEditingMemory(null)} className="btn-secondary text-xs py-1.5 flex-1">Cancel</button>
+                            <button type="submit" className="btn-primary text-xs py-1.5 flex-1">Save</button>
+                          </div>
+                        </form>
+                      ) : (
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start gap-2 flex-wrap">
+                              <p className="text-sm text-text-primary flex-1">{m.content}</p>
+                              {m.added_by_ai && <AIBadge />}
+                            </div>
+                            <div className="flex items-center gap-2 mt-1.5">
+                              <div className="flex items-center gap-0.5">{importanceDots(m.importance)}</div>
+                              <span className="text-xs text-text-muted">importance {m.importance}/5</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button onClick={() => startEditMemory(m)} className="btn-ghost p-1.5" title="Edit memory">
+                              <Edit2 className="w-3 h-3" />
+                            </button>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await memoriesApi.delete(m.id)
+                                  onMemoryDeleted(m.id, workspace.id)
+                                } catch (err) {
+                                  alert(err instanceof Error ? err.message : 'Failed to delete memory')
+                                }
+                              }}
+                              className="btn-danger p-1.5"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Documents ──────────────────────────────────────────────────── */}
+          <SectionToggle
+            label="Documents"
+            section="documents"
+            count={0}
+            icon={<FileText className="w-3.5 h-3.5" />}
+            accent="text-accent-warning"
+            activeSection={activeSection}
+            onToggle={toggleSection}
+          />
+          {activeSection === 'documents' && (
+            <div className="ml-7 pl-3 border-l border-border-subtle py-2">
+              <p className="text-xs text-text-muted italic">
+                Document management will be available here in a future update.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -663,12 +744,37 @@ const WorkspacesPage: FC = () => {
   const mutate = (wsId: number, fn: (ws: Workspace) => Workspace) =>
     setWorkspaces(prev => prev.map(w => w.id === wsId ? fn(w) : w))
 
+  // Group workspaces by claw (claw_id / claw_name)
+  const grouped: { clawId: number | null; clawName: string; workspaces: Workspace[] }[] = []
+  const seenClaws = new Map<string, number>()
+  for (const ws of workspaces) {
+    const key = ws.claw_id != null ? String(ws.claw_id) : 'none'
+    if (!seenClaws.has(key)) {
+      seenClaws.set(key, grouped.length)
+      grouped.push({ clawId: ws.claw_id, clawName: ws.claw_name ?? 'Unassigned', workspaces: [] })
+    }
+    grouped[seenClaws.get(key)!].workspaces.push(ws)
+  }
+
+  const wsRowCommonProps = {
+    claws,
+    onDelete: handleDelete,
+    onEdit: (w: Workspace) => setEditingWs(w),
+    onSkillCreated: (s: Skill, wsId: number) => mutate(wsId, w => ({ ...w, skills: [...w.skills, s] })),
+    onSkillDeleted: (skillId: number, wsId: number) => mutate(wsId, w => ({ ...w, skills: w.skills.filter(s => s.id !== skillId) })),
+    onSkillUpdated: (s: Skill, wsId: number) => mutate(wsId, w => ({ ...w, skills: w.skills.map(sk => sk.id === s.id ? s : sk) })),
+    onMemoryCreated: (m: Memory, wsId: number) => mutate(wsId, w => ({ ...w, memories: [...w.memories, m] })),
+    onMemoryDeleted: (memId: number, wsId: number) => mutate(wsId, w => ({ ...w, memories: w.memories.filter(m => m.id !== memId) })),
+    onMemoryUpdated: (m: Memory, wsId: number) => mutate(wsId, w => ({ ...w, memories: w.memories.map(me => me.id === m.id ? m : me) })),
+    onWorkspaceUpdated: (updated: Workspace) => setWorkspaces(prev => prev.map(w => w.id === updated.id ? updated : w)),
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-text-primary">Workspaces</h1>
-          <p className="text-text-secondary mt-1">Organize skills and memories for each task context</p>
+          <p className="text-text-secondary mt-1">Agent workspaces organized by Claw instance</p>
         </div>
         <button onClick={() => setShowCreate(true)} className="btn-primary">
           <Plus className="w-4 h-4" />
@@ -684,28 +790,29 @@ const WorkspacesPage: FC = () => {
         <div className="card p-16 text-center">
           <FolderKanban className="w-16 h-16 mx-auto mb-4 text-text-muted opacity-30" />
           <h2 className="text-lg font-semibold text-text-primary mb-2">No workspaces yet</h2>
-          <p className="text-text-secondary mb-6">Create a workspace to organize skills and memories</p>
+          <p className="text-text-secondary mb-6">Create a workspace to organize agent skills and memories</p>
           <button onClick={() => setShowCreate(true)} className="btn-primary mx-auto">
             <Plus className="w-4 h-4" />Create Workspace
           </button>
         </div>
       ) : (
-        <div className="space-y-4">
-          {workspaces.map(ws => (
-            <WorkspaceRow
-              key={ws.id}
-              workspace={ws}
-              claws={claws}
-              onDelete={handleDelete}
-              onEdit={w => setEditingWs(w)}
-              onSkillCreated={(s, wsId) => mutate(wsId, w => ({ ...w, skills: [...w.skills, s] }))}
-              onSkillDeleted={(skillId, wsId) => mutate(wsId, w => ({ ...w, skills: w.skills.filter(s => s.id !== skillId) }))}
-              onSkillUpdated={(s, wsId) => mutate(wsId, w => ({ ...w, skills: w.skills.map(sk => sk.id === s.id ? s : sk) }))}
-              onMemoryCreated={(m, wsId) => mutate(wsId, w => ({ ...w, memories: [...w.memories, m] }))}
-              onMemoryDeleted={(memId, wsId) => mutate(wsId, w => ({ ...w, memories: w.memories.filter(m => m.id !== memId) }))}
-              onMemoryUpdated={(m, wsId) => mutate(wsId, w => ({ ...w, memories: w.memories.map(me => me.id === m.id ? m : me) }))}
-              onWorkspaceUpdated={updated => setWorkspaces(prev => prev.map(w => w.id === updated.id ? updated : w))}
-            />
+        <div className="space-y-6">
+          {grouped.map(group => (
+            <div key={group.clawId ?? 'none'} className="space-y-3">
+              {/* Claw group header */}
+              <div className="flex items-center gap-2 px-1">
+                <Server className="w-4 h-4 text-accent-purple shrink-0" />
+                <h2 className="text-sm font-semibold text-text-primary">{group.clawName}</h2>
+                <span className="text-xs text-text-muted bg-bg-elevated px-2 py-0.5 rounded-full">
+                  {group.workspaces.length} workspace{group.workspaces.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <div className="space-y-3 pl-4 border-l-2 border-border-subtle">
+                {group.workspaces.map(ws => (
+                  <WorkspaceRow key={ws.id} workspace={ws} {...wsRowCommonProps} />
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       )}

@@ -138,6 +138,17 @@ export interface MemoryUpdate {
   importance?: number
 }
 
+export interface ClawConfigVersion {
+  id: number
+  claw_id: number
+  version_number: number
+  name: string
+  url: string
+  model: string | null
+  description: string | null
+  created_at: string | null
+}
+
 export interface SkillVersion {
   id: number
   skill_id: number

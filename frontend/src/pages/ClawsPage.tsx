@@ -4,7 +4,110 @@ import { clawsApi, templatesApi } from '../api/client'
 import type { Claw, Template } from '../api/types'
 import ClawCard from '../components/ClawCard'
 
-interface ClawForm {
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Merge a base URL with an explicit port, if the URL has no port already */
+function mergePort(url: string, port: string): string {
+  if (!port.trim()) return url
+  try {
+    const u = new URL(url)
+    if (!u.port) u.port = port.trim()
+    return u.toString()
+  } catch {
+    return url
+  }
+}
+
+// ── Add Claw modal (simplified) ───────────────────────────────────────────────
+
+interface AddClawForm {
+  name: string
+  url: string
+  token: string
+  port: string
+}
+
+const DEFAULT_ADD: AddClawForm = { name: '', url: '', token: '', port: '' }
+
+const AddClawModal: FC<{
+  onClose: () => void
+  onSave: (data: { name: string; url: string; api_key: string }) => Promise<void>
+}> = ({ onClose, onSave }) => {
+  const [form, setForm] = useState<AddClawForm>(DEFAULT_ADD)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const set = (k: keyof AddClawForm) =>
+    (e: React.ChangeEvent<HTMLInputElement>) =>
+      setForm(prev => ({ ...prev, [k]: e.target.value }))
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!form.name.trim() || !form.url.trim()) {
+      setError('Name and Gateway URL are required')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      const urlWithPort = mergePort(form.url.trim(), form.port)
+      await onSave({ name: form.name.trim(), url: urlWithPort, api_key: form.token.trim() })
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-bg-card border border-border rounded-2xl shadow-card w-full max-w-md animate-slide-up">
+        <div className="flex items-center justify-between p-5 border-b border-border-subtle">
+          <h2 className="font-semibold text-text-primary">Add New Claw</h2>
+          <button onClick={onClose} className="btn-ghost p-1.5">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <form onSubmit={submit} className="p-5 space-y-4">
+          {error && (
+            <div className="flex items-center gap-2 text-sm text-accent-danger bg-accent-danger/10 border border-accent-danger/20 rounded-xl px-3 py-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              {error}
+            </div>
+          )}
+          <div>
+            <label className="label">Name *</label>
+            <input className="input" value={form.name} onChange={set('name')} placeholder="Alpha Claw" required />
+          </div>
+          <div>
+            <label className="label">Gateway URL *</label>
+            <input className="input font-mono" value={form.url} onChange={set('url')} placeholder="http://openclaw:8080" required />
+          </div>
+          <div>
+            <label className="label">Gateway Port <span className="text-text-muted font-normal">(leave blank if URL includes port)</span></label>
+            <input className="input font-mono" value={form.port} onChange={set('port')} placeholder="8080" />
+          </div>
+          <div>
+            <label className="label">Gateway Token</label>
+            <input className="input font-mono" type="password" value={form.token} onChange={set('token')} placeholder="sk-…" />
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+            <button type="submit" disabled={saving} className="btn-primary flex-1">
+              {saving ? 'Saving…' : 'Add Claw'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ── Edit Claw modal (full fields) ─────────────────────────────────────────────
+
+interface EditClawForm {
   name: string
   url: string
   api_key: string
@@ -12,20 +115,20 @@ interface ClawForm {
   model: string
 }
 
-const DEFAULT_FORM: ClawForm = { name: '', url: '', api_key: '', description: '', model: 'gpt-4' }
+const DEFAULT_EDIT: EditClawForm = { name: '', url: '', api_key: '', description: '', model: 'gpt-4' }
 
-const ClawModal: FC<{
-  initial?: Partial<ClawForm>
+const EditClawModal: FC<{
+  initial: Partial<EditClawForm>
   onClose: () => void
-  onSave: (data: ClawForm) => Promise<void>
-  title: string
-}> = ({ initial, onClose, onSave, title }) => {
-  const [form, setForm] = useState<ClawForm>({ ...DEFAULT_FORM, ...initial })
+  onSave: (data: EditClawForm) => Promise<void>
+}> = ({ initial, onClose, onSave }) => {
+  const [form, setForm] = useState<EditClawForm>({ ...DEFAULT_EDIT, ...initial })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  const set = (k: keyof ClawForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
-    setForm(prev => ({ ...prev, [k]: e.target.value }))
+  const set = (k: keyof EditClawForm) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+      setForm(prev => ({ ...prev, [k]: e.target.value }))
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -50,7 +153,7 @@ const ClawModal: FC<{
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative bg-bg-card border border-border rounded-2xl shadow-card w-full max-w-lg animate-slide-up">
         <div className="flex items-center justify-between p-5 border-b border-border-subtle">
-          <h2 className="font-semibold text-text-primary">{title}</h2>
+          <h2 className="font-semibold text-text-primary">Edit Claw</h2>
           <button onClick={onClose} className="btn-ghost p-1.5">
             <X className="w-4 h-4" />
           </button>
@@ -113,12 +216,12 @@ const ClawsPage: FC = () => {
       .finally(() => setLoading(false))
   }, [])
 
-  const handleCreate = async (form: ClawForm) => {
-    const claw = await clawsApi.create(form)
+  const handleCreate = async (data: { name: string; url: string; api_key: string }) => {
+    const claw = await clawsApi.create(data)
     setClaws(prev => [...prev, claw])
   }
 
-  const handleUpdate = async (form: ClawForm) => {
+  const handleUpdate = async (form: EditClawForm) => {
     if (!editingClaw) return
     const claw = await clawsApi.update(editingClaw.id, form)
     setClaws(prev => prev.map(c => c.id === claw.id ? claw : c))
@@ -182,16 +285,14 @@ const ClawsPage: FC = () => {
       )}
 
       {showModal && (
-        <ClawModal
-          title="Add New Claw"
+        <AddClawModal
           onClose={() => setShowModal(false)}
           onSave={handleCreate}
         />
       )}
 
       {editingClaw && (
-        <ClawModal
-          title="Edit Claw"
+        <EditClawModal
           initial={{
             name: editingClaw.name,
             url: editingClaw.url,
