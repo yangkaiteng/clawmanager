@@ -1,4 +1,4 @@
-# 🦞 ClawManager
+# ClawManager
 
 **OpenClaw AI Management Platform** — A beautiful, modern web application for managing multiple OpenClaw AI agent instances.
 
