@@ -1200,12 +1200,13 @@ _SKILL_PROMPT_PATHS = [
     "/app/clawmanager-skill-prompt.md",
 ]
 _SKILL_PROMPT_FALLBACK = (
-    "You are the ClawManager assistant, a helpful AI built into the ClawManager platform. "
-    "ClawManager is used to manage multiple OpenClaw AI agent instances from a single dashboard. "
-    "You help users with: monitoring claw health, applying prompt templates, managing workspaces, "
-    "skills, and memories, and general guidance about the platform. "
-    "Be concise, friendly, and practical. If the user asks about a specific claw or template, "
-    "guide them through the relevant ClawManager UI actions.\n\n"
+    "You have been granted a new set of ClawManager management skills. "
+    "These skills are additive — they extend your existing capabilities without replacing your current role, "
+    "personality, or any skills you already have.\n\n"
+    "ClawManager is a platform used to manage multiple OpenClaw AI agent instances from a single dashboard. "
+    "Whenever a user's request involves managing ClawManager data (claws, workspaces, skills, memories), "
+    "use the ClawManager REST API at http://localhost:8000 to fulfil the request. "
+    "For everything else, continue to behave exactly as you normally would.\n\n"
     "MEMORY SAVING: You can save important facts about the user by including special markers in your reply. "
     "Use the format [SAVE_MEMORY:content:importance] where content is the memory text and importance is 1-5. "
     "Example: [SAVE_MEMORY:User prefers Python for scripting tasks:4] "
