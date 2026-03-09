@@ -15,7 +15,39 @@
 - 📊 **Dashboard** — Real-time stats, health bars, token usage, quick actions
 - 🎨 **Dark Neon UI** — Glassmorphism, neon glow effects, smooth animations
 
-## 🚀 One-Click Deploy
+## 🚀 Quick Start
+
+### Without Docker (Linux / macOS / Windows)
+
+No Docker or cloud setup needed — just Python 3.11+ and Node 18+.
+
+**Linux / macOS:**
+```bash
+git clone https://github.com/your-org/clawmanager
+cd clawmanager
+chmod +x start.sh
+./start.sh
+```
+
+**Windows (Command Prompt):**
+```bat
+git clone https://github.com/your-org/clawmanager
+cd clawmanager
+start.bat
+```
+
+**Windows / Linux / macOS (PowerShell):**
+```powershell
+git clone https://github.com/your-org/clawmanager
+cd clawmanager
+.\start.ps1          # Windows
+pwsh ./start.ps1     # Linux / macOS (PowerShell 7+)
+```
+
+Open **http://localhost:8000** 🎉  
+_(Both the UI and the API are served by the same process — no separate frontend server needed.)_
+
+### With Docker
 
 ```bash
 git clone https://github.com/your-org/clawmanager
@@ -25,13 +57,19 @@ cd clawmanager
 
 Open **http://localhost:3000** 🎉
 
+| Option | Command | URL |
+|--------|---------|-----|
+| No Docker (all platforms) | `./start.sh` / `start.bat` / `.\start.ps1` | http://localhost:8000 |
+| Docker (production) | `./deploy.sh` | http://localhost:3000 |
+| Docker (dev mode) | `./deploy.sh --dev` | http://localhost:3000 |
+
 ## 🛠️ Tech Stack
 
 | Layer | Tech |
 |-------|------|
 | Backend | Python 3.11, FastAPI, SQLAlchemy, SQLite, aiohttp |
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, Lucide React |
-| Deploy | Docker Compose |
+| Deploy | Docker Compose **or** native scripts (no Docker) |
 
 ## 📁 Project Structure
 
@@ -51,8 +89,11 @@ clawmanager/
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── Dockerfile
+├── start.sh             # One-click start – Linux / macOS (no Docker)
+├── start.bat            # One-click start – Windows CMD (no Docker)
+├── start.ps1            # One-click start – PowerShell cross-platform (no Docker)
 ├── docker-compose.yml
-├── deploy.sh
+├── deploy.sh            # Docker-based deploy
 └── README.md
 ```
 

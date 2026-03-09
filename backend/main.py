@@ -8,6 +8,8 @@ from typing import Optional, List
 import aiohttp
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -1165,3 +1167,23 @@ def get_stats(db: Session = Depends(get_db)):
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "clawmanager-api"}
+
+
+# ─── Optional: serve built frontend (no-Docker mode) ─────────────────────────
+# When FRONTEND_DIST env var points to the frontend/dist directory, the backend
+# serves the React SPA directly so only one process is needed.
+
+_frontend_dist = os.environ.get("FRONTEND_DIST", "")
+if _frontend_dist and os.path.isdir(_frontend_dist):
+    _assets_dir = os.path.join(_frontend_dist, "assets")
+    if os.path.isdir(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        index = os.path.join(_frontend_dist, "index.html")
+        if os.path.isfile(index):
+            return FileResponse(index)
+        return {"error": "Frontend not found"}
