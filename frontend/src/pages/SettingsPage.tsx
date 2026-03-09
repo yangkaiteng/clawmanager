@@ -1,7 +1,10 @@
 import { useState, useEffect, type FC } from 'react'
-import { Brain, Save, CheckCircle, AlertCircle, ExternalLink, ServerCog } from 'lucide-react'
+import { Brain, Save, CheckCircle, AlertCircle, ExternalLink, ServerCog, Info, ArrowRight } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { assistantApi, clawsApi } from '../api/client'
 import type { AssistantConfig, Claw } from '../api/types'
+
+const SETUP_DONE_KEY = 'clawmanager_setup_seen'
 
 const SettingsPage: FC = () => {
   const [config, setConfig] = useState<AssistantConfig | null>(null)
@@ -38,6 +41,10 @@ const SettingsPage: FC = () => {
       } as Partial<AssistantConfig>)
       setConfig(updated)
       setSaved(true)
+      // Mark setup as seen when a claw is appointed
+      if (form.claw_id !== '') {
+        localStorage.setItem(SETUP_DONE_KEY, '1')
+      }
       setTimeout(() => setSaved(false), 3000)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
@@ -52,12 +59,72 @@ const SettingsPage: FC = () => {
     return 'text-text-muted'
   }
 
+  const isFirstSetup = !config?.claw_id
+
   return (
     <div className="max-w-2xl mx-auto space-y-8 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-text-primary">Settings</h1>
         <p className="text-text-secondary mt-1">Appoint an OpenClaw instance as the Claw AI Assistant</p>
       </div>
+
+      {/* First-time setup guide */}
+      {isFirstSetup && (
+        <div className="card p-5 border border-accent-purple/40 space-y-4">
+          <div className="flex items-start gap-3">
+            <Info className="w-5 h-5 text-accent-purple shrink-0 mt-0.5" />
+            <div>
+              <h3 className="font-semibold text-text-primary">Initial Setup Required</h3>
+              <p className="text-sm text-text-secondary mt-1">
+                ClawManager requires an appointed AI assistant to function fully.
+                Follow these steps to get started:
+              </p>
+            </div>
+          </div>
+          <ol className="space-y-3 pl-3">
+            {[
+              {
+                step: 1,
+                done: claws.length > 0,
+                title: 'Add a Claw',
+                desc: 'Register your OpenClaw gateway instance (URL + token).',
+                action: claws.length === 0 ? (
+                  <Link to="/claws" className="inline-flex items-center gap-1 text-accent-purple text-xs font-medium hover:underline">
+                    Go to Claws <ArrowRight className="w-3 h-3" />
+                  </Link>
+                ) : null,
+              },
+              {
+                step: 2,
+                done: !!config?.claw_id,
+                title: 'Appoint an AI Assistant',
+                desc: 'Select one of your registered claws below to act as the AI assistant.',
+                action: null,
+              },
+              {
+                step: 3,
+                done: saved,
+                title: 'Save Settings',
+                desc: 'Click "Save Settings" — ClawManager will send the skill prompt to the selected claw.',
+                action: null,
+              },
+            ].map(({ step, done, title, desc, action }) => (
+              <li key={step} className="flex items-start gap-3">
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
+                  done ? 'bg-accent-success/20 text-accent-success' : 'bg-bg-elevated text-text-muted'
+                }`}>
+                  {done ? '✓' : step}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-medium ${done ? 'text-text-muted line-through' : 'text-text-primary'}`}>{title}</p>
+                  <p className="text-xs text-text-muted mt-0.5">{desc}</p>
+                  {action && <div className="mt-1">{action}</div>}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       {/* Assistant config */}
       <div className="card p-6 space-y-6">

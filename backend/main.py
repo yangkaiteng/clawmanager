@@ -6,11 +6,12 @@ from datetime import datetime
 from typing import Optional, List
 
 import aiohttp
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from models import (
@@ -298,6 +299,60 @@ app.add_middleware(
 )
 
 
+# ─── Field hints for AI-friendly validation errors ────────────────────────────
+
+_FIELD_HINTS: dict[str, str] = {
+    "name": "must be a non-empty string, e.g. \"My Claw\"",
+    "url": "must be a full URL including scheme and host, e.g. \"http://openclaw-host:8080\"",
+    "api_key": "optional bearer token string, e.g. \"sk-abc123\"",
+    "model": "optional model identifier string, e.g. \"gpt-4\" or \"gpt-4-turbo\"",
+    "description": "optional plain-text description string",
+    "prompt": "required non-empty string containing the skill prompt template",
+    "workspace_id": "must be a valid integer ID of an existing workspace (use GET /api/workspaces to list)",
+    "claw_id": "must be a valid integer ID of an existing claw (use GET /api/claws to list), or null to unassign",
+    "content": "required non-empty string for the memory text",
+    "importance": "integer from 1 (low) to 5 (critical), default 3",
+    "template_id": "must be a valid integer ID of an existing template (use GET /api/templates to list)",
+    "prompt_content": "required non-empty string containing the template prompt",
+    "category": "string category label, e.g. \"general\", \"development\", \"analysis\"",
+}
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Return AI-friendly validation errors with field hints and example values."""
+    errors = []
+    for err in exc.errors():
+        loc = err.get("loc", [])
+        field = loc[-1] if loc else "unknown"
+        msg = err.get("msg", "invalid value")
+        hint = _FIELD_HINTS.get(str(field), "")
+        detail_parts = [f"Field '{field}': {msg}"]
+        if hint:
+            detail_parts.append(f"Hint: {hint}")
+        errors.append({
+            "field": field,
+            "error": msg,
+            "hint": hint,
+            "location": " → ".join(str(l) for l in loc),
+        })
+    summary = "; ".join(
+        f"'{e['field']}' — {e['error']}" + (f" ({e['hint']})" if e['hint'] else "")
+        for e in errors
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": errors,
+            "summary": summary,
+            "help": (
+                "Fix the listed fields and retry. "
+                "All IDs must reference existing records — "
+                "use the corresponding GET endpoint to list valid IDs."
+            ),
+        },
+    )
+
 # ─── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class ClawCreate(BaseModel):
@@ -306,6 +361,24 @@ class ClawCreate(BaseModel):
     api_key: Optional[str] = None
     description: Optional[str] = None
     model: Optional[str] = "gpt-4"
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name must be a non-empty string, e.g. \"My Claw\"")
+        return v.strip()
+
+    @field_validator("url")
+    @classmethod
+    def url_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("url must be a non-empty string, e.g. \"http://openclaw-host:8080\"")
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError(
+                "url must start with http:// or https://, e.g. \"http://openclaw-host:8080\""
+            )
+        return v.strip()
 
 
 class ClawUpdate(BaseModel):
@@ -338,6 +411,13 @@ class WorkspaceCreate(BaseModel):
     claw_id: Optional[int] = None
     description: Optional[str] = None
 
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name must be a non-empty string, e.g. \"Research Hub\"")
+        return v.strip()
+
 
 class WorkspaceUpdate(BaseModel):
     name: Optional[str] = None
@@ -350,6 +430,20 @@ class SkillCreate(BaseModel):
     description: Optional[str] = None
     prompt: str
     workspace_id: int
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name must be a non-empty string, e.g. \"Summarize Text\"")
+        return v.strip()
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("prompt must be a non-empty string containing the skill template text")
+        return v
 
 
 class SkillUpdate(BaseModel):
@@ -364,10 +458,31 @@ class MemoryCreate(BaseModel):
     workspace_id: Optional[int] = None
     importance: int = 3
 
+    @field_validator("content")
+    @classmethod
+    def content_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("content must be a non-empty string describing the memory")
+        return v.strip()
+
+    @field_validator("importance")
+    @classmethod
+    def importance_range(cls, v: int) -> int:
+        if not (1 <= v <= 5):
+            raise ValueError("importance must be an integer between 1 (low) and 5 (critical)")
+        return v
+
 
 class MemoryUpdate(BaseModel):
     content: Optional[str] = None
     importance: Optional[int] = None
+
+    @field_validator("importance")
+    @classmethod
+    def importance_range(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and not (1 <= v <= 5):
+            raise ValueError("importance must be an integer between 1 (low) and 5 (critical)")
+        return v
 
 
 class AssistantMemoryCreate(BaseModel):
@@ -376,12 +491,26 @@ class AssistantMemoryCreate(BaseModel):
     workspace_id: Optional[int] = None
     importance: int = 3
 
+    @field_validator("importance")
+    @classmethod
+    def importance_range(cls, v: int) -> int:
+        if not (1 <= v <= 5):
+            raise ValueError("importance must be an integer between 1 (low) and 5 (critical)")
+        return v
+
 
 class AssistantSkillCreate(BaseModel):
     name: str
     description: Optional[str] = None
     prompt: str
     workspace_id: int
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("prompt must be a non-empty string containing the skill template text")
+        return v
 
 
 class AssistantConfigUpdate(BaseModel):
@@ -901,7 +1030,13 @@ def list_skills(workspace_id: Optional[int] = Query(None), db: Session = Depends
 def create_skill(body: SkillCreate, db: Session = Depends(get_db)):
     workspace = db.query(Workspace).filter(Workspace.id == body.workspace_id).first()
     if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Workspace with id={body.workspace_id} not found. "
+                "Use GET /api/workspaces to list all workspaces and find a valid workspace_id."
+            ),
+        )
     s = Skill(**body.model_dump())
     db.add(s)
     db.commit()
@@ -913,7 +1048,14 @@ def create_skill(body: SkillCreate, db: Session = Depends(get_db)):
 def update_skill(skill_id: int, body: SkillUpdate, db: Session = Depends(get_db)):
     s = db.query(Skill).filter(Skill.id == skill_id).first()
     if not s:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Skill with id={skill_id} not found. "
+                "Use GET /api/skills to list all skills. "
+                "To create a new skill use POST /api/skills with {name, prompt, workspace_id}."
+            ),
+        )
     # Save current state as a version before updating
     next_version = db.query(SkillVersion).filter(SkillVersion.skill_id == skill_id).count() + 1
     version = SkillVersion(
@@ -1017,7 +1159,13 @@ def create_memory(body: MemoryCreate, db: Session = Depends(get_db)):
 def delete_memory(memory_id: int, db: Session = Depends(get_db)):
     m = db.query(Memory).filter(Memory.id == memory_id).first()
     if not m:
-        raise HTTPException(status_code=404, detail="Memory not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Memory with id={memory_id} not found. "
+                "Use GET /api/memories to list all memories and find valid IDs."
+            ),
+        )
     db.delete(m)
     db.commit()
     return {"message": "Memory deleted"}
@@ -1027,7 +1175,14 @@ def delete_memory(memory_id: int, db: Session = Depends(get_db)):
 def update_memory(memory_id: int, body: MemoryUpdate, db: Session = Depends(get_db)):
     m = db.query(Memory).filter(Memory.id == memory_id).first()
     if not m:
-        raise HTTPException(status_code=404, detail="Memory not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Memory with id={memory_id} not found. "
+                "Use GET /api/memories to list all memories. "
+                "To create a new memory use POST /api/memories with {content, importance (1-5), claw_id?, workspace_id?}."
+            ),
+        )
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(m, field, value)
     m.updated_at = datetime.utcnow()
