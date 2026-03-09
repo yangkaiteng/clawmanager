@@ -23,7 +23,7 @@ No Docker or cloud setup needed — just Python 3.11+ and Node 18+.
 
 **Linux / macOS:**
 ```bash
-git clone https://github.com/your-org/clawmanager
+git clone https://github.com/yangkaiteng/clawmanager
 cd clawmanager
 chmod +x start.sh
 ./start.sh
@@ -31,14 +31,14 @@ chmod +x start.sh
 
 **Windows (Command Prompt):**
 ```bat
-git clone https://github.com/your-org/clawmanager
+git clone https://github.com/yangkaiteng/clawmanager
 cd clawmanager
 start.bat
 ```
 
 **Windows / Linux / macOS (PowerShell):**
 ```powershell
-git clone https://github.com/your-org/clawmanager
+git clone https://github.com/yangkaiteng/clawmanager
 cd clawmanager
 .\start.ps1          # Windows
 pwsh ./start.ps1     # Linux / macOS (PowerShell 7+)
@@ -50,7 +50,7 @@ _(Both the UI and the API are served by the same process — no separate fronten
 ### With Docker
 
 ```bash
-git clone https://github.com/your-org/clawmanager
+git clone https://github.com/yangkaiteng/clawmanager
 cd clawmanager
 ./deploy.sh
 ```
