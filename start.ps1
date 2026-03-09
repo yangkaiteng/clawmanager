@@ -58,7 +58,7 @@ if (-not (Test-Command "npm")) {
 # ── Install Python dependencies ───────────────────────────────────────────────
 Write-Host ""
 Write-Host "-> Installing backend dependencies..." -ForegroundColor Cyan
-& $Python -m pip install -r (Join-Path $ScriptDir "backend\requirements.txt") -q
+& $Python -m pip install --upgrade -r (Join-Path $ScriptDir "backend\requirements.txt") -q
 Write-Host "+  Backend dependencies ready" -ForegroundColor Green
 
 # ── Build frontend ────────────────────────────────────────────────────────────

@@ -42,7 +42,7 @@ for /f %%V in ('node --version') do echo ^+  Node %%V
 :: ── Install Python dependencies ───────────────────────────────────────────────
 echo.
 echo ^> Installing backend dependencies...
-!PYTHON! -m pip install -r "%SCRIPT_DIR%backend\requirements.txt" -q
+!PYTHON! -m pip install --upgrade -r "%SCRIPT_DIR%backend\requirements.txt" -q
 if errorlevel 1 (
   echo X  pip install failed. Check your Python installation.
   pause

@@ -52,7 +52,7 @@ fi
 # ── Install Python dependencies ──────────────────────────────────────────────
 echo ""
 echo "→ Installing backend dependencies..."
-"$PYTHON" -m pip install -r "$SCRIPT_DIR/backend/requirements.txt" -q
+"$PYTHON" -m pip install --upgrade -r "$SCRIPT_DIR/backend/requirements.txt" -q
 echo "✓ Backend dependencies ready"
 
 # ── Build frontend ────────────────────────────────────────────────────────────
