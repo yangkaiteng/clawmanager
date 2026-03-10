@@ -2,7 +2,8 @@ import type {
   Claw, Template, Workspace, Skill, Memory,
   AssistantConfig, Stats, HealthCheckResult, ChatResponse,
   ClawCreate, TemplateCreate, WorkspaceCreate, SkillCreate, MemoryCreate,
-  SkillUpdate, MemoryUpdate, SkillVersion, WorkspaceSnapshot,
+  SkillUpdate, MemoryUpdate, SkillVersion, WorkspaceSnapshot, ClawConfigVersion,
+  ClawMaintenance, ClawMaintenanceLog,
 } from './types'
 
 const API_BASE = '/api'
@@ -37,6 +38,17 @@ export const clawsApi = {
       { method: 'POST', body: JSON.stringify({ template_id: templateId }) }
     ),
   stats: (id: number) => request<Record<string, unknown>>(`/claws/${id}/stats`),
+  listConfigVersions: (id: number) => request<ClawConfigVersion[]>(`/claws/${id}/config-versions`),
+  saveConfigVersion: (id: number) =>
+    request<ClawConfigVersion>(`/claws/${id}/config-versions`, { method: 'POST' }),
+  restoreConfigVersion: (clawId: number, versionId: number) =>
+    request<Claw>(`/claws/${clawId}/config-versions/${versionId}/restore`, { method: 'POST' }),
+  getMaintenance: (id: number) => request<ClawMaintenance>(`/claws/${id}/maintenance`),
+  updateMaintenance: (id: number, data: Partial<Pick<ClawMaintenance, 'mode' | 'schedule'>>) =>
+    request<ClawMaintenance>(`/claws/${id}/maintenance`, { method: 'PUT', body: JSON.stringify(data) }),
+  runMaintenance: (id: number) =>
+    request<ClawMaintenanceLog>(`/claws/${id}/maintenance/run`, { method: 'POST' }),
+  listMaintenanceLogs: (id: number) => request<ClawMaintenanceLog[]>(`/claws/${id}/maintenance/logs`),
 }
 
 // ── Templates ──────────────────────────────────────────────────────────────

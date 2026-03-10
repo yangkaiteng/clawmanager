@@ -9,8 +9,8 @@ import NanoClawAssistant from './NanoClawAssistant'
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/claws', icon: Server, label: 'Claws' },
-  { to: '/templates', icon: BookTemplate, label: 'Templates' },
   { to: '/workspaces', icon: FolderKanban, label: 'Workspaces' },
+  { to: '/templates', icon: BookTemplate, label: 'Templates' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 
@@ -55,7 +55,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
             >
               {({ isActive }) => (
                 <>
-                  <Icon className={`w-4.5 h-4.5 ${isActive ? 'text-accent-purple' : ''}`} style={{ width: '18px', height: '18px' }} />
+                  <Icon size={18} className={isActive ? 'text-accent-purple' : ''} />
                   {label}
                 </>
               )}

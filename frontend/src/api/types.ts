@@ -138,6 +138,37 @@ export interface MemoryUpdate {
   importance?: number
 }
 
+export interface ClawConfigVersion {
+  id: number
+  claw_id: number
+  version_number: number
+  name: string
+  url: string
+  model: string | null
+  description: string | null
+  created_at: string | null
+}
+
+export interface ClawMaintenance {
+  id: number
+  claw_id: number
+  mode: 'auto' | 'manual'
+  schedule: 'daily' | 'weekly' | 'monthly'
+  last_run_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ClawMaintenanceLog {
+  id: number
+  claw_id: number
+  category: string
+  related_documents: string | null
+  run_at: string | null
+  success: boolean
+  remark: string | null
+}
+
 export interface SkillVersion {
   id: number
   skill_id: number

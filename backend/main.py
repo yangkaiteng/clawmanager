@@ -6,17 +6,19 @@ from datetime import datetime
 from typing import Optional, List
 
 import aiohttp
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from models import (
-    Base, engine, get_db,
+    Base, engine, get_db, SessionLocal,
     Claw, Template, Workspace, Skill, Memory, AssistantConfig,
-    SkillVersion, WorkspaceSnapshot
+    SkillVersion, WorkspaceSnapshot, ClawConfigVersion,
+    ClawMaintenance, ClawMaintenanceLog,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +28,6 @@ os.makedirs(os.environ.get("DATA_DIR", "/app/data"), exist_ok=True)
 
 
 def seed_database():
-    from models import SessionLocal
     db = SessionLocal()
     try:
         if db.query(Template).count() == 0:
@@ -284,7 +285,15 @@ async def lifespan(app: FastAPI):
 
     Base.metadata.create_all(bind=engine)
     seed_database()
+
+    # Start background maintenance scheduler
+    scheduler_task = asyncio.create_task(_maintenance_scheduler())
     yield
+    scheduler_task.cancel()
+    try:
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(title="ClawManager API", version="1.0.0", lifespan=lifespan)
@@ -298,6 +307,60 @@ app.add_middleware(
 )
 
 
+# ─── Field hints for AI-friendly validation errors ────────────────────────────
+
+_FIELD_HINTS: dict[str, str] = {
+    "name": "must be a non-empty string, e.g. \"My Claw\"",
+    "url": "must be a full URL including scheme and host, e.g. \"http://openclaw-host:8080\"",
+    "api_key": "optional bearer token string, e.g. \"sk-abc123\"",
+    "model": "optional model identifier string, e.g. \"gpt-4\" or \"gpt-4-turbo\"",
+    "description": "optional plain-text description string",
+    "prompt": "required non-empty string containing the skill prompt template",
+    "workspace_id": "must be a valid integer ID of an existing workspace (use GET /api/workspaces to list)",
+    "claw_id": "must be a valid integer ID of an existing claw (use GET /api/claws to list), or null to unassign",
+    "content": "required non-empty string for the memory text",
+    "importance": "integer from 1 (low) to 5 (critical), default 3",
+    "template_id": "must be a valid integer ID of an existing template (use GET /api/templates to list)",
+    "prompt_content": "required non-empty string containing the template prompt",
+    "category": "string category label, e.g. \"general\", \"development\", \"analysis\"",
+}
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Return AI-friendly validation errors with field hints and example values."""
+    errors = []
+    for err in exc.errors():
+        loc = err.get("loc", [])
+        field = loc[-1] if loc else "unknown"
+        msg = err.get("msg", "invalid value")
+        hint = _FIELD_HINTS.get(str(field), "")
+        detail_parts = [f"Field '{field}': {msg}"]
+        if hint:
+            detail_parts.append(f"Hint: {hint}")
+        errors.append({
+            "field": field,
+            "error": msg,
+            "hint": hint,
+            "location": " → ".join(str(l) for l in loc),
+        })
+    summary = "; ".join(
+        f"'{e['field']}' — {e['error']}" + (f" ({e['hint']})" if e['hint'] else "")
+        for e in errors
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": errors,
+            "summary": summary,
+            "help": (
+                "Fix the listed fields and retry. "
+                "All IDs must reference existing records — "
+                "use the corresponding GET endpoint to list valid IDs."
+            ),
+        },
+    )
+
 # ─── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class ClawCreate(BaseModel):
@@ -306,6 +369,24 @@ class ClawCreate(BaseModel):
     api_key: Optional[str] = None
     description: Optional[str] = None
     model: Optional[str] = "gpt-4"
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name must be a non-empty string, e.g. \"My Claw\"")
+        return v.strip()
+
+    @field_validator("url")
+    @classmethod
+    def url_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("url must be a non-empty string, e.g. \"http://openclaw-host:8080\"")
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError(
+                "url must start with http:// or https://, e.g. \"http://openclaw-host:8080\""
+            )
+        return v.strip()
 
 
 class ClawUpdate(BaseModel):
@@ -338,6 +419,13 @@ class WorkspaceCreate(BaseModel):
     claw_id: Optional[int] = None
     description: Optional[str] = None
 
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name must be a non-empty string, e.g. \"Research Hub\"")
+        return v.strip()
+
 
 class WorkspaceUpdate(BaseModel):
     name: Optional[str] = None
@@ -350,6 +438,20 @@ class SkillCreate(BaseModel):
     description: Optional[str] = None
     prompt: str
     workspace_id: int
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name must be a non-empty string, e.g. \"Summarize Text\"")
+        return v.strip()
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("prompt must be a non-empty string containing the skill template text")
+        return v
 
 
 class SkillUpdate(BaseModel):
@@ -364,10 +466,31 @@ class MemoryCreate(BaseModel):
     workspace_id: Optional[int] = None
     importance: int = 3
 
+    @field_validator("content")
+    @classmethod
+    def content_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("content must be a non-empty string describing the memory")
+        return v.strip()
+
+    @field_validator("importance")
+    @classmethod
+    def importance_range(cls, v: int) -> int:
+        if not (1 <= v <= 5):
+            raise ValueError("importance must be an integer between 1 (low) and 5 (critical)")
+        return v
+
 
 class MemoryUpdate(BaseModel):
     content: Optional[str] = None
     importance: Optional[int] = None
+
+    @field_validator("importance")
+    @classmethod
+    def importance_range(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and not (1 <= v <= 5):
+            raise ValueError("importance must be an integer between 1 (low) and 5 (critical)")
+        return v
 
 
 class AssistantMemoryCreate(BaseModel):
@@ -376,12 +499,26 @@ class AssistantMemoryCreate(BaseModel):
     workspace_id: Optional[int] = None
     importance: int = 3
 
+    @field_validator("importance")
+    @classmethod
+    def importance_range(cls, v: int) -> int:
+        if not (1 <= v <= 5):
+            raise ValueError("importance must be an integer between 1 (low) and 5 (critical)")
+        return v
+
 
 class AssistantSkillCreate(BaseModel):
     name: str
     description: Optional[str] = None
     prompt: str
     workspace_id: int
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("prompt must be a non-empty string containing the skill template text")
+        return v
 
 
 class AssistantConfigUpdate(BaseModel):
@@ -495,6 +632,19 @@ def workspace_snapshot_to_dict(ws: WorkspaceSnapshot) -> dict:
     }
 
 
+def claw_config_version_to_dict(cv: ClawConfigVersion) -> dict:
+    return {
+        "id": cv.id,
+        "claw_id": cv.claw_id,
+        "version_number": cv.version_number,
+        "name": cv.name,
+        "url": cv.url,
+        "model": cv.model,
+        "description": cv.description,
+        "created_at": cv.created_at.isoformat() if cv.created_at else None,
+    }
+
+
 # ─── Claws ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/claws")
@@ -503,11 +653,18 @@ def list_claws(db: Session = Depends(get_db)):
 
 
 @app.post("/api/claws", status_code=201)
-def create_claw(body: ClawCreate, db: Session = Depends(get_db)):
+async def create_claw(body: ClawCreate, db: Session = Depends(get_db)):
     claw = Claw(**body.model_dump())
     db.add(claw)
     db.commit()
     db.refresh(claw)
+    # Fire-and-forget: send skill-injection + pairing prompt to the new claw.
+    # Keep a reference so the task is not silently garbage-collected before completion.
+    task = asyncio.create_task(_send_pairing_prompt(claw))
+    task.add_done_callback(
+        lambda t: logger.warning(f"Pairing prompt task raised: {t.exception()}")
+        if not t.cancelled() and t.exception() else None
+    )
     return claw_to_dict(claw)
 
 
@@ -652,6 +809,317 @@ def claw_stats(claw_id: int, db: Session = Depends(get_db)):
         "status": claw.status,
         "last_health_check": claw.last_health_check.isoformat() if claw.last_health_check else None,
     }
+
+
+@app.get("/api/claws/{claw_id}/config-versions")
+def list_config_versions(claw_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    versions = (
+        db.query(ClawConfigVersion)
+        .filter(ClawConfigVersion.claw_id == claw_id)
+        .order_by(ClawConfigVersion.version_number.desc())
+        .all()
+    )
+    return [claw_config_version_to_dict(v) for v in versions]
+
+
+@app.post("/api/claws/{claw_id}/config-versions", status_code=201)
+def save_config_version(claw_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    last = (
+        db.query(ClawConfigVersion)
+        .filter(ClawConfigVersion.claw_id == claw_id)
+        .order_by(ClawConfigVersion.version_number.desc())
+        .first()
+    )
+    next_version = (last.version_number + 1) if last else 1
+    cv = ClawConfigVersion(
+        claw_id=claw_id,
+        version_number=next_version,
+        name=claw.name,
+        url=claw.url,
+        model=claw.model,
+        description=claw.description,
+    )
+    db.add(cv)
+    db.commit()
+    db.refresh(cv)
+    return claw_config_version_to_dict(cv)
+
+
+@app.post("/api/claws/{claw_id}/config-versions/{version_id}/restore")
+def restore_config_version(claw_id: int, version_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    cv = db.query(ClawConfigVersion).filter(
+        ClawConfigVersion.id == version_id,
+        ClawConfigVersion.claw_id == claw_id,
+    ).first()
+    if not cv:
+        raise HTTPException(status_code=404, detail="Config version not found")
+    claw.name = cv.name
+    claw.url = cv.url
+    claw.model = cv.model
+    claw.description = cv.description
+    claw.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(claw)
+    return claw_to_dict(claw)
+
+
+# ─── Maintenance settings & logs ──────────────────────────────────────────────
+
+CLAWMANAGER_BASE_URL = os.environ.get("CLAWMANAGER_BASE_URL", "http://localhost:8000")
+
+
+def _maintenance_to_dict(m: ClawMaintenance) -> dict:
+    return {
+        "id": m.id,
+        "claw_id": m.claw_id,
+        "mode": m.mode,
+        "schedule": m.schedule,
+        "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+        "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+    }
+
+
+def _maintenance_log_to_dict(log: ClawMaintenanceLog) -> dict:
+    return {
+        "id": log.id,
+        "claw_id": log.claw_id,
+        "category": log.category,
+        "related_documents": log.related_documents,
+        "run_at": log.run_at.isoformat() if log.run_at else None,
+        "success": log.success,
+        "remark": log.remark,
+    }
+
+
+def _get_or_create_maintenance(claw_id: int, db: Session) -> ClawMaintenance:
+    m = db.query(ClawMaintenance).filter(ClawMaintenance.claw_id == claw_id).first()
+    if not m:
+        m = ClawMaintenance(claw_id=claw_id, mode="manual", schedule="daily")
+        db.add(m)
+        db.commit()
+        db.refresh(m)
+    return m
+
+
+class MaintenanceSettingsUpdate(BaseModel):
+    mode: Optional[str] = None      # "auto" | "manual"
+    schedule: Optional[str] = None  # "daily" | "weekly" | "monthly"
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("auto", "manual"):
+            raise ValueError("mode must be 'auto' or 'manual'")
+        return v
+
+    @field_validator("schedule")
+    @classmethod
+    def validate_schedule(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("daily", "weekly", "monthly"):
+            raise ValueError("schedule must be 'daily', 'weekly', or 'monthly'")
+        return v
+
+
+@app.get("/api/claws/{claw_id}/maintenance")
+def get_maintenance_settings(claw_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    return _maintenance_to_dict(_get_or_create_maintenance(claw_id, db))
+
+
+@app.put("/api/claws/{claw_id}/maintenance")
+def update_maintenance_settings(
+    claw_id: int, body: MaintenanceSettingsUpdate, db: Session = Depends(get_db)
+):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    m = _get_or_create_maintenance(claw_id, db)
+    if body.mode is not None:
+        m.mode = body.mode
+    if body.schedule is not None:
+        m.schedule = body.schedule
+    m.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(m)
+    return _maintenance_to_dict(m)
+
+
+@app.post("/api/claws/{claw_id}/maintenance/run", status_code=202)
+async def run_maintenance_now(claw_id: int, db: Session = Depends(get_db)):
+    """Trigger a manual maintenance run for a claw immediately."""
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    log = await _run_maintenance_for_claw(claw, db)
+    return _maintenance_log_to_dict(log)
+
+
+@app.get("/api/claws/{claw_id}/maintenance/logs")
+def list_maintenance_logs(claw_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    logs = (
+        db.query(ClawMaintenanceLog)
+        .filter(ClawMaintenanceLog.claw_id == claw_id)
+        .order_by(ClawMaintenanceLog.run_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [_maintenance_log_to_dict(log) for log in logs]
+
+
+async def _send_to_claw(claw: Claw, messages: list, timeout: int = 20) -> dict:
+    """Send a chat/completions request to a claw and return the parsed JSON response."""
+    headers = {"Content-Type": "application/json"}
+    if claw.api_key:
+        headers["Authorization"] = f"Bearer {claw.api_key}"
+    payload = {"model": claw.model or "gpt-4", "messages": messages}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{claw.url.rstrip('/')}/api/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+            ssl=False,
+        ) as resp:
+            return await resp.json()
+
+
+async def _send_pairing_prompt(claw: Claw) -> None:
+    """Send the pairing + skill-injection prompt to a newly added claw."""
+    prompt = PAIRING_PROMPT_TEMPLATE.format(
+        claw_name=claw.name,
+        claw_url=claw.url,
+        claw_id=claw.id,
+        clawmanager_base_url=CLAWMANAGER_BASE_URL,
+        skill_prompt=CLAWMANAGER_SYSTEM_PROMPT,
+    )
+    try:
+        result = await _send_to_claw(
+            claw,
+            [
+                {"role": "system", "content": CLAWMANAGER_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            timeout=15,
+        )
+        tokens = result.get("usage", {}).get("total_tokens", 0)
+        logger.info(
+            f"Pairing prompt sent to claw '{claw.name}' "
+            f"(tokens: {tokens}): "
+            f"{result.get('choices', [{}])[0].get('message', {}).get('content', '')[:80]!r}"
+        )
+    except Exception as e:
+        logger.warning(f"Could not send pairing prompt to claw '{claw.name}': {e}")
+
+
+async def _run_maintenance_for_claw(claw: Claw, db: Session) -> ClawMaintenanceLog:
+    """Build the maintenance prompt with live backend data and send it to the claw."""
+    workspaces = db.query(Workspace).filter(Workspace.claw_id == claw.id).all()
+    workspace_names = ", ".join(w.name for w in workspaces) if workspaces else "none"
+    skill_count = sum(len(w.skills) for w in workspaces)
+    memory_count = db.query(Memory).filter(Memory.claw_id == claw.id).count()
+
+    prompt = MAINTENANCE_PROMPT_TEMPLATE.format(
+        claw_name=claw.name,
+        claw_id=claw.id,
+        claw_url=claw.url,
+        claw_model=claw.model or "N/A",
+        workspace_count=len(workspaces),
+        workspace_names=workspace_names,
+        skill_count=skill_count,
+        memory_count=memory_count,
+        last_health_check=claw.last_health_check.isoformat() if claw.last_health_check else "never",
+        run_at=datetime.utcnow().isoformat(),
+        clawmanager_base_url=CLAWMANAGER_BASE_URL,
+    )
+
+    success = False
+    remark = ""
+    related_docs = f"workspaces: {workspace_names}"
+
+    try:
+        result = await _send_to_claw(
+            claw,
+            [
+                {"role": "system", "content": CLAWMANAGER_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            timeout=30,
+        )
+        reply = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        tokens = result.get("usage", {}).get("total_tokens", 0)
+        success = True
+        remark = reply[:500] if reply else "OK"
+        if tokens:
+            claw.total_tokens = (claw.total_tokens or 0) + tokens
+        logger.info(f"Maintenance run complete for claw '{claw.name}' (tokens: {tokens})")
+    except Exception as e:
+        remark = f"Error: {str(e)[:300]}"
+        logger.warning(f"Maintenance run failed for claw '{claw.name}': {e}")
+
+    log = ClawMaintenanceLog(
+        claw_id=claw.id,
+        category="maintenance",
+        related_documents=related_docs,
+        run_at=datetime.utcnow(),
+        success=success,
+        remark=remark,
+    )
+    db.add(log)
+
+    # Update last_run_at on the maintenance settings record
+    m = _get_or_create_maintenance(claw.id, db)
+    m.last_run_at = datetime.utcnow()
+    m.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+async def _maintenance_scheduler() -> None:
+    """Background task: run auto-maintenance for claws whose schedule is due."""
+    INTERVAL_SECONDS = 3600  # check every hour
+    SCHEDULE_HOURS = {
+        "daily": 24,
+        "weekly": 168,
+        "monthly": 720,  # approximation: 30 days × 24 hours
+    }
+
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL_SECONDS)
+            db = SessionLocal()
+            try:
+                settings = db.query(ClawMaintenance).filter(ClawMaintenance.mode == "auto").all()
+                now = datetime.utcnow()
+                for s in settings:
+                    hours = SCHEDULE_HOURS.get(s.schedule, 24)
+                    if s.last_run_at is None or (now - s.last_run_at).total_seconds() >= hours * 3600:
+                        claw = db.query(Claw).filter(Claw.id == s.claw_id).first()
+                        if claw:
+                            logger.info(f"Auto-maintenance triggered for claw '{claw.name}'")
+                            await _run_maintenance_for_claw(claw, db)
+            finally:
+                db.close()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Maintenance scheduler error: {e}")
 
 
 # ─── Templates ────────────────────────────────────────────────────────────────
@@ -827,7 +1295,13 @@ def list_skills(workspace_id: Optional[int] = Query(None), db: Session = Depends
 def create_skill(body: SkillCreate, db: Session = Depends(get_db)):
     workspace = db.query(Workspace).filter(Workspace.id == body.workspace_id).first()
     if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Workspace with id={body.workspace_id} not found. "
+                "Use GET /api/workspaces to list all workspaces and find a valid workspace_id."
+            ),
+        )
     s = Skill(**body.model_dump())
     db.add(s)
     db.commit()
@@ -839,7 +1313,14 @@ def create_skill(body: SkillCreate, db: Session = Depends(get_db)):
 def update_skill(skill_id: int, body: SkillUpdate, db: Session = Depends(get_db)):
     s = db.query(Skill).filter(Skill.id == skill_id).first()
     if not s:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Skill with id={skill_id} not found. "
+                "Use GET /api/skills to list all skills. "
+                "To create a new skill use POST /api/skills with {name, prompt, workspace_id}."
+            ),
+        )
     # Save current state as a version before updating
     next_version = db.query(SkillVersion).filter(SkillVersion.skill_id == skill_id).count() + 1
     version = SkillVersion(
@@ -943,7 +1424,13 @@ def create_memory(body: MemoryCreate, db: Session = Depends(get_db)):
 def delete_memory(memory_id: int, db: Session = Depends(get_db)):
     m = db.query(Memory).filter(Memory.id == memory_id).first()
     if not m:
-        raise HTTPException(status_code=404, detail="Memory not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Memory with id={memory_id} not found. "
+                "Use GET /api/memories to list all memories and find valid IDs."
+            ),
+        )
     db.delete(m)
     db.commit()
     return {"message": "Memory deleted"}
@@ -953,7 +1440,14 @@ def delete_memory(memory_id: int, db: Session = Depends(get_db)):
 def update_memory(memory_id: int, body: MemoryUpdate, db: Session = Depends(get_db)):
     m = db.query(Memory).filter(Memory.id == memory_id).first()
     if not m:
-        raise HTTPException(status_code=404, detail="Memory not found")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Memory with id={memory_id} not found. "
+                "Use GET /api/memories to list all memories. "
+                "To create a new memory use POST /api/memories with {content, importance (1-5), claw_id?, workspace_id?}."
+            ),
+        )
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(m, field, value)
     m.updated_at = datetime.utcnow()
@@ -965,20 +1459,102 @@ def update_memory(memory_id: int, body: MemoryUpdate, db: Session = Depends(get_
 
 # ─── Assistant ────────────────────────────────────────────────────────────────
 
-# System prompt injected when an appointed claw is used as the ClawManager assistant
-CLAWMANAGER_SYSTEM_PROMPT = (
-    "You are the ClawManager assistant, a helpful AI built into the ClawManager platform. "
-    "ClawManager is used to manage multiple OpenClaw AI agent instances from a single dashboard. "
-    "You help users with: monitoring claw health, applying prompt templates, managing workspaces, "
-    "skills, and memories, and general guidance about the platform. "
-    "Be concise, friendly, and practical. If the user asks about a specific claw or template, "
-    "guide them through the relevant ClawManager UI actions.\n\n"
+# Load system prompt from clawmanager-skill-prompt.md if available, else use built-in default
+_SKILL_PROMPT_PATHS = [
+    os.path.join(os.path.dirname(__file__), "..", "clawmanager-skill-prompt.md"),
+    "/app/clawmanager-skill-prompt.md",
+]
+_SKILL_PROMPT_FALLBACK = (
+    "You have been granted a new set of ClawManager management skills. "
+    "These skills are additive — they extend your existing capabilities without replacing your current role, "
+    "personality, or any skills you already have.\n\n"
+    "ClawManager is a platform used to manage multiple OpenClaw AI agent instances from a single dashboard. "
+    "Whenever a user's request involves managing ClawManager data (claws, workspaces, skills, memories), "
+    "use the ClawManager REST API at http://localhost:8000 to fulfil the request. "
+    "For everything else, continue to behave exactly as you normally would.\n\n"
     "MEMORY SAVING: You can save important facts about the user by including special markers in your reply. "
     "Use the format [SAVE_MEMORY:content:importance] where content is the memory text and importance is 1-5. "
     "Example: [SAVE_MEMORY:User prefers Python for scripting tasks:4] "
     "These markers will be automatically stripped from your displayed reply and saved as memories. "
     "Use this sparingly for genuinely useful persistent facts."
 )
+
+
+def _load_skill_prompt() -> str:
+    for path in _SKILL_PROMPT_PATHS:
+        try:
+            resolved = os.path.realpath(path)
+            if os.path.isfile(resolved):
+                with open(resolved, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        logger.info(f"Loaded skill prompt from {resolved}")
+                        return content
+                    logger.warning(f"Skill prompt file is empty: {resolved}")
+            else:
+                logger.info(f"Skill prompt not found at: {resolved}")
+        except Exception as e:
+            logger.warning(f"Could not read skill prompt from {path}: {e}")
+    logger.info("Using built-in default skill prompt")
+    return _SKILL_PROMPT_FALLBACK
+
+
+# System prompt injected when an appointed claw is used as the ClawManager assistant
+CLAWMANAGER_SYSTEM_PROMPT = _load_skill_prompt()
+
+# ── Prompt templates sent to newly added and maintained claws ──────────────────
+
+PAIRING_PROMPT_TEMPLATE = """\
+A new ClawManager connection has been established with this OpenClaw instance ("{claw_name}").
+
+## What is ClawManager?
+ClawManager is a control centre that uses this claw as its AI assistant to manage multiple
+OpenClaw instances, workspaces, skills, and memories through natural language.
+
+## Your new ClawManager skills
+{skill_prompt}
+
+## Pairing confirmation task
+Now that you are connected, please:
+1. Acknowledge this pairing by responding with a short confirmation.
+2. Call the ClawManager API to record a memory about yourself using:
+   POST {clawmanager_base_url}/api/assistant/memories
+   Body: {{"content": "Claw '{claw_name}' paired with ClawManager at {claw_url}", "importance": 3, "claw_id": {claw_id}}}
+3. If you have any skills, workspaces, or agent configurations you would like to register,
+   use POST {clawmanager_base_url}/api/skills or POST {clawmanager_base_url}/api/workspaces.
+
+Respond with: "Pairing confirmed for {claw_name}. ClawManager skills added."
+"""
+
+MAINTENANCE_PROMPT_TEMPLATE = """\
+## ClawManager Maintenance Run — {claw_name}
+Date/time: {run_at}
+
+### Current ClawManager data for this claw
+- Claw ID: {claw_id}
+- URL: {claw_url}
+- Model: {claw_model}
+- Workspaces: {workspace_count} ({workspace_names})
+- Skills: {skill_count}
+- Memories: {memory_count}
+- Last health check: {last_health_check}
+
+### Maintenance tasks
+Please review the above data and perform any needed updates:
+
+1. **Verify data completeness** — if any workspace, skill, or memory is missing or stale,
+   call the ClawManager API to add or update it.
+2. **Backup key context** — save any important facts as memories:
+   POST {clawmanager_base_url}/api/assistant/memories
+   Body: {{"content": "<fact>", "importance": <1-5>, "claw_id": {claw_id}}}
+3. **Update skills** — if any skill prompts need revision, call:
+   PUT {clawmanager_base_url}/api/skills/<skill_id>
+   Body: {{"prompt": "<updated prompt>"}}
+4. **Report** — end your response with a JSON block summarising what you did:
+   ```json
+   {{"updated_memories": <count>, "updated_skills": <count>, "remarks": "<notes>"}}
+   ```
+"""
 
 MOCK_RESPONSES = [
     "I'm Nano Claw, your AI assistant! I can help you manage your OpenClaw instances, apply templates, and monitor system health. What would you like to know?",
@@ -1080,7 +1656,7 @@ def get_assistant_config(db: Session = Depends(get_db)):
 
 
 @app.put("/api/assistant/config")
-def update_assistant_config(body: AssistantConfigUpdate, db: Session = Depends(get_db)):
+async def update_assistant_config(body: AssistantConfigUpdate, db: Session = Depends(get_db)):
     config = db.query(AssistantConfig).first()
     if not config:
         config = AssistantConfig()
@@ -1092,6 +1668,39 @@ def update_assistant_config(body: AssistantConfigUpdate, db: Session = Depends(g
             setattr(config, field, value)
     db.commit()
     db.refresh(config)
+
+    # When a claw is appointed, send the skill prompt to it so it's primed as the assistant
+    if config.claw_id:
+        appointed_claw = db.query(Claw).filter(Claw.id == config.claw_id).first()
+        if appointed_claw:
+            payload = {
+                "model": appointed_claw.model or "gpt-4",
+                "messages": [
+                    {"role": "system", "content": CLAWMANAGER_SYSTEM_PROMPT},
+                    {"role": "user", "content": "You are now configured as the ClawManager AI Assistant. Please acknowledge."},
+                ],
+            }
+            headers = {"Content-Type": "application/json"}
+            if appointed_claw.api_key:
+                headers["Authorization"] = f"Bearer {appointed_claw.api_key}"
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{appointed_claw.url.rstrip('/')}/api/chat/completions",
+                        json=payload,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                        ssl=False,
+                    ) as resp:
+                        result = await resp.json()
+                        logger.info(f"Skill prompt sent to claw '{appointed_claw.name}': acknowledged")
+                        tokens_used = result.get("usage", {}).get("total_tokens", 0)
+                        if tokens_used:
+                            appointed_claw.total_tokens = (appointed_claw.total_tokens or 0) + tokens_used
+                            db.commit()
+            except Exception as e:
+                logger.warning(f"Could not send skill prompt to claw '{appointed_claw.name}': {e}")
+
     return _config_response(config)
 
 
