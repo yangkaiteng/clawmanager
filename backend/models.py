@@ -42,6 +42,8 @@ class Claw(Base):
     workspaces = relationship("Workspace", back_populates="claw", cascade="all, delete-orphan")
     memories = relationship("Memory", back_populates="claw", cascade="all, delete-orphan")
     config_versions = relationship("ClawConfigVersion", back_populates="claw", cascade="all, delete-orphan")
+    maintenance = relationship("ClawMaintenance", back_populates="claw", uselist=False, cascade="all, delete-orphan")
+    maintenance_logs = relationship("ClawMaintenanceLog", back_populates="claw", cascade="all, delete-orphan")
 
 
 class Template(Base):
@@ -157,3 +159,35 @@ class AssistantConfig(Base):
     claw_id = Column(Integer, ForeignKey("claws.id", ondelete="SET NULL"), nullable=True)
 
     claw = relationship("Claw")
+
+
+class ClawMaintenance(Base):
+    """Per-claw maintenance settings: auto vs manual, schedule, last run."""
+
+    __tablename__ = "claw_maintenance"
+
+    id = Column(Integer, primary_key=True, index=True)
+    claw_id = Column(Integer, ForeignKey("claws.id", ondelete="CASCADE"), nullable=False, unique=True)
+    mode = Column(String(20), default="manual")      # "auto" | "manual"
+    schedule = Column(String(20), default="daily")   # "daily" | "weekly" | "monthly"
+    last_run_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    claw = relationship("Claw", back_populates="maintenance")
+
+
+class ClawMaintenanceLog(Base):
+    """Record of each maintenance run for a claw."""
+
+    __tablename__ = "claw_maintenance_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    claw_id = Column(Integer, ForeignKey("claws.id", ondelete="CASCADE"), nullable=False)
+    category = Column(String(100), nullable=False)   # e.g. "skill_sync", "memory_backup"
+    related_documents = Column(Text, nullable=True)  # JSON list of document names / IDs
+    run_at = Column(DateTime, default=datetime.utcnow)
+    success = Column(Boolean, default=True)
+    remark = Column(Text, nullable=True)
+
+    claw = relationship("Claw", back_populates="maintenance_logs")

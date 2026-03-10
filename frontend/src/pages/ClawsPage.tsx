@@ -1,5 +1,5 @@
 import { useState, useEffect, type FC } from 'react'
-import { Plus, Server, X, AlertCircle } from 'lucide-react'
+import { Plus, Server, X, AlertCircle, Info } from 'lucide-react'
 import { clawsApi, templatesApi } from '../api/client'
 import type { Claw, Template } from '../api/types'
 import ClawCard from '../components/ClawCard'
@@ -17,6 +17,30 @@ function mergePort(url: string, port: string): string {
     return url
   }
 }
+
+// ── Pairing Reminder banner ───────────────────────────────────────────────────
+
+const PairingReminder: FC<{ clawName: string; clawUrl: string; onDismiss: () => void }> = ({
+  clawName, clawUrl, onDismiss,
+}) => (
+  <div className="rounded-xl border border-accent-cyan/30 bg-accent-cyan/5 p-4 flex gap-3 animate-fade-in">
+    <Info className="w-5 h-5 text-accent-cyan shrink-0 mt-0.5" />
+    <div className="flex-1 min-w-0">
+      <p className="text-sm font-semibold text-text-primary">
+        Approve pairing in <span className="text-accent-cyan">{clawName}</span>
+      </p>
+      <p className="text-xs text-text-secondary mt-1">
+        ClawManager has sent a skill-injection prompt to{' '}
+        <span className="font-mono text-text-primary">{clawUrl}</span>.
+        If your OpenClaw instance requires pairing approval, open its admin panel and
+        accept the incoming connection request so ClawManager can manage it.
+      </p>
+    </div>
+    <button onClick={onDismiss} className="btn-ghost p-1 shrink-0 self-start">
+      <X className="w-3.5 h-3.5" />
+    </button>
+  </div>
+)
 
 // ── Add Claw modal (simplified) ───────────────────────────────────────────────
 
@@ -92,6 +116,10 @@ const AddClawModal: FC<{
           <div>
             <label className="label">Gateway Token</label>
             <input className="input font-mono" type="password" value={form.token} onChange={set('token')} placeholder="sk-…" />
+          </div>
+          <div className="rounded-xl border border-accent-cyan/20 bg-accent-cyan/5 px-3 py-2 text-xs text-text-secondary">
+            After adding, ClawManager will send a pairing prompt to this claw.
+            If the claw requires pairing approval, accept it in the claw's admin panel.
           </div>
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
@@ -209,6 +237,7 @@ const ClawsPage: FC = () => {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingClaw, setEditingClaw] = useState<Claw | null>(null)
+  const [pairingReminder, setPairingReminder] = useState<{ name: string; url: string } | null>(null)
 
   useEffect(() => {
     Promise.all([clawsApi.list(), templatesApi.list()])
@@ -219,6 +248,7 @@ const ClawsPage: FC = () => {
   const handleCreate = async (data: { name: string; url: string; api_key: string }) => {
     const claw = await clawsApi.create(data)
     setClaws(prev => [...prev, claw])
+    setPairingReminder({ name: claw.name, url: claw.url })
   }
 
   const handleUpdate = async (form: EditClawForm) => {
@@ -251,6 +281,15 @@ const ClawsPage: FC = () => {
           Add Claw
         </button>
       </div>
+
+      {/* Pairing reminder */}
+      {pairingReminder && (
+        <PairingReminder
+          clawName={pairingReminder.name}
+          clawUrl={pairingReminder.url}
+          onDismiss={() => setPairingReminder(null)}
+        />
+      )}
 
       {/* Grid */}
       {loading ? (

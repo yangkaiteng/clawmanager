@@ -1,6 +1,6 @@
 import { useState, useEffect, type FC } from 'react'
-import { Activity, Edit2, Trash2, Server, Settings, History, RotateCcw, X, Camera } from 'lucide-react'
-import type { Claw, Template, ClawConfigVersion } from '../api/types'
+import { Activity, Edit2, Trash2, Server, Settings, History, RotateCcw, X, Camera, RefreshCw, Clock, ChevronDown, ChevronRight, CheckCircle2, XCircle } from 'lucide-react'
+import type { Claw, Template, ClawConfigVersion, ClawMaintenance, ClawMaintenanceLog } from '../api/types'
 import StatusBadge from './StatusBadge'
 import { clawsApi } from '../api/client'
 
@@ -104,11 +104,179 @@ const ConfigVersionsPanel: FC<{
   )
 }
 
+// ── Maintenance panel ─────────────────────────────────────────────────────────
+
+const MaintenancePanel: FC<{ claw: Claw; onClose: () => void }> = ({ claw, onClose }) => {
+  const [settings, setSettings] = useState<ClawMaintenance | null>(null)
+  const [logs, setLogs] = useState<ClawMaintenanceLog[]>([])
+  const [loadingSettings, setLoadingSettings] = useState(true)
+  const [loadingLogs, setLoadingLogs] = useState(true)
+  const [running, setRunning] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
+
+  useEffect(() => {
+    clawsApi.getMaintenance(claw.id)
+      .then(setSettings)
+      .finally(() => setLoadingSettings(false))
+    clawsApi.listMaintenanceLogs(claw.id)
+      .then(setLogs)
+      .finally(() => setLoadingLogs(false))
+  }, [claw.id])
+
+  const updateMode = async (mode: 'auto' | 'manual') => {
+    if (!settings) return
+    const updated = await clawsApi.updateMaintenance(claw.id, { mode })
+    setSettings(updated)
+  }
+
+  const updateSchedule = async (schedule: 'daily' | 'weekly' | 'monthly') => {
+    if (!settings) return
+    const updated = await clawsApi.updateMaintenance(claw.id, { schedule })
+    setSettings(updated)
+  }
+
+  const handleRunNow = async () => {
+    setRunning(true)
+    try {
+      const log = await clawsApi.runMaintenance(claw.id)
+      setLogs(prev => [log, ...prev])
+      if (settings) setSettings({ ...settings, last_run_at: log.run_at })
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div className="mt-2 p-3 bg-bg-elevated rounded-xl border border-border-subtle space-y-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
+          <RefreshCw className="w-3.5 h-3.5 text-accent-cyan" />Maintenance
+        </span>
+        <button onClick={onClose} className="btn-ghost p-1"><X className="w-3 h-3" /></button>
+      </div>
+
+      {loadingSettings ? (
+        <p className="text-xs text-text-muted">Loading…</p>
+      ) : settings ? (
+        <>
+          {/* Mode toggle */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-muted w-14 shrink-0">Mode</span>
+            <div className="flex rounded-lg overflow-hidden border border-border-subtle text-xs">
+              {(['auto', 'manual'] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={() => updateMode(m)}
+                  className={`px-3 py-1 capitalize transition-colors ${
+                    settings.mode === m
+                      ? 'bg-accent-purple text-white'
+                      : 'bg-bg-primary text-text-secondary hover:bg-bg-elevated'
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Schedule (auto only) */}
+          {settings.mode === 'auto' && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text-muted w-14 shrink-0">Schedule</span>
+              <div className="flex rounded-lg overflow-hidden border border-border-subtle text-xs">
+                {(['daily', 'weekly', 'monthly'] as const).map(s => (
+                  <button
+                    key={s}
+                    onClick={() => updateSchedule(s)}
+                    className={`px-3 py-1 capitalize transition-colors ${
+                      settings.schedule === s
+                        ? 'bg-accent-cyan text-bg-primary'
+                        : 'bg-bg-primary text-text-secondary hover:bg-bg-elevated'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Manual: Backup Now button */}
+          {settings.mode === 'manual' && (
+            <button
+              onClick={handleRunNow}
+              disabled={running}
+              className="btn-secondary text-xs py-1.5 w-full flex items-center justify-center gap-1.5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${running ? 'animate-spin' : ''}`} />
+              {running ? 'Running…' : 'Backup Now'}
+            </button>
+          )}
+
+          {/* Last run */}
+          {settings.last_run_at && (
+            <p className="text-xs text-text-muted flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              Last run: {new Date(settings.last_run_at).toLocaleString()}
+            </p>
+          )}
+        </>
+      ) : null}
+
+      {/* Logs toggle */}
+      <button
+        onClick={() => setShowLogs(v => !v)}
+        className="w-full flex items-center justify-between text-xs text-text-secondary hover:text-text-primary transition-colors"
+      >
+        <span className="flex items-center gap-1">
+          {showLogs ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          Maintenance Records ({loadingLogs ? '…' : logs.length})
+        </span>
+      </button>
+
+      {showLogs && (
+        <div className="space-y-1.5 max-h-56 overflow-y-auto">
+          {logs.length === 0 ? (
+            <p className="text-xs text-text-muted">No maintenance records yet.</p>
+          ) : (
+            logs.map(log => (
+              <div
+                key={log.id}
+                className="p-2 rounded-lg bg-bg-primary border border-border-subtle space-y-0.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    {log.success
+                      ? <CheckCircle2 className="w-3 h-3 text-accent-success shrink-0" />
+                      : <XCircle className="w-3 h-3 text-accent-danger shrink-0" />}
+                    <span className="text-xs font-medium text-text-primary capitalize">{log.category}</span>
+                  </div>
+                  <span className="text-xs text-text-muted">
+                    {log.run_at ? new Date(log.run_at).toLocaleString() : '—'}
+                  </span>
+                </div>
+                {log.related_documents && (
+                  <p className="text-xs text-text-muted pl-5">Docs: {log.related_documents}</p>
+                )}
+                {log.remark && (
+                  <p className="text-xs text-text-secondary pl-5 line-clamp-2">{log.remark}</p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Claw card ─────────────────────────────────────────────────────────────────
 
 const ClawCard: FC<ClawCardProps> = ({ claw, onEdit, onDelete, onUpdated }) => {
   const [checking, setChecking] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
+  const [showMaintenance, setShowMaintenance] = useState(false)
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
 
   const notify = (type: 'success' | 'error', msg: string) => {
@@ -209,6 +377,11 @@ const ClawCard: FC<ClawCardProps> = ({ claw, onEdit, onDelete, onUpdated }) => {
         />
       )}
 
+      {/* Maintenance panel */}
+      {showMaintenance && (
+        <MaintenancePanel claw={claw} onClose={() => setShowMaintenance(false)} />
+      )}
+
       {/* Actions */}
       <div className="flex items-center gap-2 flex-wrap">
         <button
@@ -221,11 +394,19 @@ const ClawCard: FC<ClawCardProps> = ({ claw, onEdit, onDelete, onUpdated }) => {
         </button>
 
         <button
-          onClick={() => setShowConfig(v => !v)}
+          onClick={() => { setShowConfig(v => !v); setShowMaintenance(false) }}
           className="btn-secondary text-xs py-1.5 flex-1"
         >
           <Settings className="w-3.5 h-3.5 text-accent-purple" />
           Config
+        </button>
+
+        <button
+          onClick={() => { setShowMaintenance(v => !v); setShowConfig(false) }}
+          className="btn-secondary text-xs py-1.5 flex-1"
+        >
+          <RefreshCw className="w-3.5 h-3.5 text-accent-cyan" />
+          Maintain
         </button>
 
         <button onClick={() => onEdit(claw)} className="btn-ghost text-xs py-1.5 px-2.5">

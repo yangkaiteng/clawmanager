@@ -15,9 +15,10 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from models import (
-    Base, engine, get_db,
+    Base, engine, get_db, SessionLocal,
     Claw, Template, Workspace, Skill, Memory, AssistantConfig,
-    SkillVersion, WorkspaceSnapshot, ClawConfigVersion
+    SkillVersion, WorkspaceSnapshot, ClawConfigVersion,
+    ClawMaintenance, ClawMaintenanceLog,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -27,7 +28,6 @@ os.makedirs(os.environ.get("DATA_DIR", "/app/data"), exist_ok=True)
 
 
 def seed_database():
-    from models import SessionLocal
     db = SessionLocal()
     try:
         if db.query(Template).count() == 0:
@@ -285,7 +285,15 @@ async def lifespan(app: FastAPI):
 
     Base.metadata.create_all(bind=engine)
     seed_database()
+
+    # Start background maintenance scheduler
+    scheduler_task = asyncio.create_task(_maintenance_scheduler())
     yield
+    scheduler_task.cancel()
+    try:
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(title="ClawManager API", version="1.0.0", lifespan=lifespan)
@@ -645,11 +653,18 @@ def list_claws(db: Session = Depends(get_db)):
 
 
 @app.post("/api/claws", status_code=201)
-def create_claw(body: ClawCreate, db: Session = Depends(get_db)):
+async def create_claw(body: ClawCreate, db: Session = Depends(get_db)):
     claw = Claw(**body.model_dump())
     db.add(claw)
     db.commit()
     db.refresh(claw)
+    # Fire-and-forget: send skill-injection + pairing prompt to the new claw.
+    # Keep a reference so the task is not silently garbage-collected before completion.
+    task = asyncio.create_task(_send_pairing_prompt(claw))
+    task.add_done_callback(
+        lambda t: logger.warning(f"Pairing prompt task raised: {t.exception()}")
+        if not t.cancelled() and t.exception() else None
+    )
     return claw_to_dict(claw)
 
 
@@ -855,6 +870,256 @@ def restore_config_version(claw_id: int, version_id: int, db: Session = Depends(
     db.commit()
     db.refresh(claw)
     return claw_to_dict(claw)
+
+
+# ─── Maintenance settings & logs ──────────────────────────────────────────────
+
+CLAWMANAGER_BASE_URL = os.environ.get("CLAWMANAGER_BASE_URL", "http://localhost:8000")
+
+
+def _maintenance_to_dict(m: ClawMaintenance) -> dict:
+    return {
+        "id": m.id,
+        "claw_id": m.claw_id,
+        "mode": m.mode,
+        "schedule": m.schedule,
+        "last_run_at": m.last_run_at.isoformat() if m.last_run_at else None,
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+        "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+    }
+
+
+def _maintenance_log_to_dict(log: ClawMaintenanceLog) -> dict:
+    return {
+        "id": log.id,
+        "claw_id": log.claw_id,
+        "category": log.category,
+        "related_documents": log.related_documents,
+        "run_at": log.run_at.isoformat() if log.run_at else None,
+        "success": log.success,
+        "remark": log.remark,
+    }
+
+
+def _get_or_create_maintenance(claw_id: int, db: Session) -> ClawMaintenance:
+    m = db.query(ClawMaintenance).filter(ClawMaintenance.claw_id == claw_id).first()
+    if not m:
+        m = ClawMaintenance(claw_id=claw_id, mode="manual", schedule="daily")
+        db.add(m)
+        db.commit()
+        db.refresh(m)
+    return m
+
+
+class MaintenanceSettingsUpdate(BaseModel):
+    mode: Optional[str] = None      # "auto" | "manual"
+    schedule: Optional[str] = None  # "daily" | "weekly" | "monthly"
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("auto", "manual"):
+            raise ValueError("mode must be 'auto' or 'manual'")
+        return v
+
+    @field_validator("schedule")
+    @classmethod
+    def validate_schedule(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("daily", "weekly", "monthly"):
+            raise ValueError("schedule must be 'daily', 'weekly', or 'monthly'")
+        return v
+
+
+@app.get("/api/claws/{claw_id}/maintenance")
+def get_maintenance_settings(claw_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    return _maintenance_to_dict(_get_or_create_maintenance(claw_id, db))
+
+
+@app.put("/api/claws/{claw_id}/maintenance")
+def update_maintenance_settings(
+    claw_id: int, body: MaintenanceSettingsUpdate, db: Session = Depends(get_db)
+):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    m = _get_or_create_maintenance(claw_id, db)
+    if body.mode is not None:
+        m.mode = body.mode
+    if body.schedule is not None:
+        m.schedule = body.schedule
+    m.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(m)
+    return _maintenance_to_dict(m)
+
+
+@app.post("/api/claws/{claw_id}/maintenance/run", status_code=202)
+async def run_maintenance_now(claw_id: int, db: Session = Depends(get_db)):
+    """Trigger a manual maintenance run for a claw immediately."""
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    log = await _run_maintenance_for_claw(claw, db)
+    return _maintenance_log_to_dict(log)
+
+
+@app.get("/api/claws/{claw_id}/maintenance/logs")
+def list_maintenance_logs(claw_id: int, db: Session = Depends(get_db)):
+    claw = db.query(Claw).filter(Claw.id == claw_id).first()
+    if not claw:
+        raise HTTPException(status_code=404, detail="Claw not found")
+    logs = (
+        db.query(ClawMaintenanceLog)
+        .filter(ClawMaintenanceLog.claw_id == claw_id)
+        .order_by(ClawMaintenanceLog.run_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [_maintenance_log_to_dict(log) for log in logs]
+
+
+async def _send_to_claw(claw: Claw, messages: list, timeout: int = 20) -> dict:
+    """Send a chat/completions request to a claw and return the parsed JSON response."""
+    headers = {"Content-Type": "application/json"}
+    if claw.api_key:
+        headers["Authorization"] = f"Bearer {claw.api_key}"
+    payload = {"model": claw.model or "gpt-4", "messages": messages}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{claw.url.rstrip('/')}/api/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+            ssl=False,
+        ) as resp:
+            return await resp.json()
+
+
+async def _send_pairing_prompt(claw: Claw) -> None:
+    """Send the pairing + skill-injection prompt to a newly added claw."""
+    prompt = PAIRING_PROMPT_TEMPLATE.format(
+        claw_name=claw.name,
+        claw_url=claw.url,
+        claw_id=claw.id,
+        clawmanager_base_url=CLAWMANAGER_BASE_URL,
+        skill_prompt=CLAWMANAGER_SYSTEM_PROMPT,
+    )
+    try:
+        result = await _send_to_claw(
+            claw,
+            [
+                {"role": "system", "content": CLAWMANAGER_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            timeout=15,
+        )
+        tokens = result.get("usage", {}).get("total_tokens", 0)
+        logger.info(
+            f"Pairing prompt sent to claw '{claw.name}' "
+            f"(tokens: {tokens}): "
+            f"{result.get('choices', [{}])[0].get('message', {}).get('content', '')[:80]!r}"
+        )
+    except Exception as e:
+        logger.warning(f"Could not send pairing prompt to claw '{claw.name}': {e}")
+
+
+async def _run_maintenance_for_claw(claw: Claw, db: Session) -> ClawMaintenanceLog:
+    """Build the maintenance prompt with live backend data and send it to the claw."""
+    workspaces = db.query(Workspace).filter(Workspace.claw_id == claw.id).all()
+    workspace_names = ", ".join(w.name for w in workspaces) if workspaces else "none"
+    skill_count = sum(len(w.skills) for w in workspaces)
+    memory_count = db.query(Memory).filter(Memory.claw_id == claw.id).count()
+
+    prompt = MAINTENANCE_PROMPT_TEMPLATE.format(
+        claw_name=claw.name,
+        claw_id=claw.id,
+        claw_url=claw.url,
+        claw_model=claw.model or "N/A",
+        workspace_count=len(workspaces),
+        workspace_names=workspace_names,
+        skill_count=skill_count,
+        memory_count=memory_count,
+        last_health_check=claw.last_health_check.isoformat() if claw.last_health_check else "never",
+        run_at=datetime.utcnow().isoformat(),
+        clawmanager_base_url=CLAWMANAGER_BASE_URL,
+    )
+
+    success = False
+    remark = ""
+    related_docs = f"workspaces: {workspace_names}"
+
+    try:
+        result = await _send_to_claw(
+            claw,
+            [
+                {"role": "system", "content": CLAWMANAGER_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            timeout=30,
+        )
+        reply = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        tokens = result.get("usage", {}).get("total_tokens", 0)
+        success = True
+        remark = reply[:500] if reply else "OK"
+        if tokens:
+            claw.total_tokens = (claw.total_tokens or 0) + tokens
+        logger.info(f"Maintenance run complete for claw '{claw.name}' (tokens: {tokens})")
+    except Exception as e:
+        remark = f"Error: {str(e)[:300]}"
+        logger.warning(f"Maintenance run failed for claw '{claw.name}': {e}")
+
+    log = ClawMaintenanceLog(
+        claw_id=claw.id,
+        category="maintenance",
+        related_documents=related_docs,
+        run_at=datetime.utcnow(),
+        success=success,
+        remark=remark,
+    )
+    db.add(log)
+
+    # Update last_run_at on the maintenance settings record
+    m = _get_or_create_maintenance(claw.id, db)
+    m.last_run_at = datetime.utcnow()
+    m.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+async def _maintenance_scheduler() -> None:
+    """Background task: run auto-maintenance for claws whose schedule is due."""
+    INTERVAL_SECONDS = 3600  # check every hour
+    SCHEDULE_HOURS = {
+        "daily": 24,
+        "weekly": 168,
+        "monthly": 720,  # approximation: 30 days × 24 hours
+    }
+
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL_SECONDS)
+            db = SessionLocal()
+            try:
+                settings = db.query(ClawMaintenance).filter(ClawMaintenance.mode == "auto").all()
+                now = datetime.utcnow()
+                for s in settings:
+                    hours = SCHEDULE_HOURS.get(s.schedule, 24)
+                    if s.last_run_at is None or (now - s.last_run_at).total_seconds() >= hours * 3600:
+                        claw = db.query(Claw).filter(Claw.id == s.claw_id).first()
+                        if claw:
+                            logger.info(f"Auto-maintenance triggered for claw '{claw.name}'")
+                            await _run_maintenance_for_claw(claw, db)
+            finally:
+                db.close()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Maintenance scheduler error: {e}")
 
 
 # ─── Templates ────────────────────────────────────────────────────────────────
@@ -1236,6 +1501,60 @@ def _load_skill_prompt() -> str:
 
 # System prompt injected when an appointed claw is used as the ClawManager assistant
 CLAWMANAGER_SYSTEM_PROMPT = _load_skill_prompt()
+
+# ── Prompt templates sent to newly added and maintained claws ──────────────────
+
+PAIRING_PROMPT_TEMPLATE = """\
+A new ClawManager connection has been established with this OpenClaw instance ("{claw_name}").
+
+## What is ClawManager?
+ClawManager is a control centre that uses this claw as its AI assistant to manage multiple
+OpenClaw instances, workspaces, skills, and memories through natural language.
+
+## Your new ClawManager skills
+{skill_prompt}
+
+## Pairing confirmation task
+Now that you are connected, please:
+1. Acknowledge this pairing by responding with a short confirmation.
+2. Call the ClawManager API to record a memory about yourself using:
+   POST {clawmanager_base_url}/api/assistant/memories
+   Body: {{"content": "Claw '{claw_name}' paired with ClawManager at {claw_url}", "importance": 3, "claw_id": {claw_id}}}
+3. If you have any skills, workspaces, or agent configurations you would like to register,
+   use POST {clawmanager_base_url}/api/skills or POST {clawmanager_base_url}/api/workspaces.
+
+Respond with: "Pairing confirmed for {claw_name}. ClawManager skills added."
+"""
+
+MAINTENANCE_PROMPT_TEMPLATE = """\
+## ClawManager Maintenance Run — {claw_name}
+Date/time: {run_at}
+
+### Current ClawManager data for this claw
+- Claw ID: {claw_id}
+- URL: {claw_url}
+- Model: {claw_model}
+- Workspaces: {workspace_count} ({workspace_names})
+- Skills: {skill_count}
+- Memories: {memory_count}
+- Last health check: {last_health_check}
+
+### Maintenance tasks
+Please review the above data and perform any needed updates:
+
+1. **Verify data completeness** — if any workspace, skill, or memory is missing or stale,
+   call the ClawManager API to add or update it.
+2. **Backup key context** — save any important facts as memories:
+   POST {clawmanager_base_url}/api/assistant/memories
+   Body: {{"content": "<fact>", "importance": <1-5>, "claw_id": {claw_id}}}
+3. **Update skills** — if any skill prompts need revision, call:
+   PUT {clawmanager_base_url}/api/skills/<skill_id>
+   Body: {{"prompt": "<updated prompt>"}}
+4. **Report** — end your response with a JSON block summarising what you did:
+   ```json
+   {{"updated_memories": <count>, "updated_skills": <count>, "remarks": "<notes>"}}
+   ```
+"""
 
 MOCK_RESPONSES = [
     "I'm Nano Claw, your AI assistant! I can help you manage your OpenClaw instances, apply templates, and monitor system health. What would you like to know?",

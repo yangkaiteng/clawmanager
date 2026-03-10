@@ -99,6 +99,33 @@ curl http://localhost:8000/api/claws/{claw_id}/config-versions
 curl -X POST http://localhost:8000/api/claws/{claw_id}/config-versions/{version_id}/restore
 ```
 
+#### Get maintenance settings
+```bash
+curl http://localhost:8000/api/claws/{claw_id}/maintenance
+```
+Response: `{"id":1,"claw_id":1,"mode":"manual","schedule":"daily","last_run_at":null,...}`
+- `mode` — `"auto"` (scheduler-driven) or `"manual"` (on-demand)
+- `schedule` — `"daily"`, `"weekly"`, or `"monthly"` (only used when mode is `"auto"`)
+
+#### Update maintenance settings
+```bash
+curl -X PUT http://localhost:8000/api/claws/{claw_id}/maintenance \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "auto", "schedule": "daily"}'
+```
+
+#### Trigger a maintenance run now
+```bash
+curl -X POST http://localhost:8000/api/claws/{claw_id}/maintenance/run
+```
+Sends the maintenance prompt to the claw and records the result. Returns the log entry.
+
+#### List maintenance logs
+```bash
+curl http://localhost:8000/api/claws/{claw_id}/maintenance/logs
+```
+Response: `[{"id":1,"claw_id":1,"category":"maintenance","related_documents":"...","run_at":"...","success":true,"remark":"..."}]`
+
 ---
 
 ### Workspaces
