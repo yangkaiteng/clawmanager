@@ -155,8 +155,11 @@ class AssistantConfig(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=True, default="Nano Claw")
-    # References the claw appointed as the assistant; NULL = mock mode
+    # References the claw appointed as the assistant; NULL = no live claw
     claw_id = Column(Integer, ForeignKey("claws.id", ondelete="SET NULL"), nullable=True)
+    # When True the assistant falls back to built-in mock responses if no live
+    # claw is reachable.  Set to False to require a real claw connection.
+    mock_enabled = Column(Boolean, default=True, nullable=False)
 
     claw = relationship("Claw")
 

@@ -9,7 +9,7 @@ const SETUP_DONE_KEY = 'clawmanager_setup_seen'
 const SettingsPage: FC = () => {
   const [config, setConfig] = useState<AssistantConfig | null>(null)
   const [claws, setClaws] = useState<Claw[]>([])
-  const [form, setForm] = useState({ claw_id: '', name: 'Nano Claw' })
+  const [form, setForm] = useState({ claw_id: '', name: 'Nano Claw', mock_enabled: true })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
@@ -21,6 +21,7 @@ const SettingsPage: FC = () => {
       setForm({
         claw_id: c.claw_id != null ? String(c.claw_id) : '',
         name: c.name ?? 'Nano Claw',
+        mock_enabled: c.mock_enabled ?? true,
       })
     })
   }, [])
@@ -38,6 +39,7 @@ const SettingsPage: FC = () => {
       const updated = await assistantApi.updateConfig({
         claw_id: form.claw_id !== '' ? Number(form.claw_id) : null,
         name: form.name,
+        mock_enabled: form.mock_enabled,
       } as Partial<AssistantConfig>)
       setConfig(updated)
       setSaved(true)
@@ -165,7 +167,7 @@ const SettingsPage: FC = () => {
               Appointed Claw
             </label>
             <select className="input" value={form.claw_id} onChange={set('claw_id')}>
-              <option value="">— None (Mock Mode) —</option>
+              <option value="">— None —</option>
               {claws.map(c => (
                 <option key={c.id} value={c.id}>
                   {c.name} ({c.url}) — {c.status}
@@ -183,8 +185,38 @@ const SettingsPage: FC = () => {
                 only when ClawManager can reach the appointed claw over the network. Deploy ClawManager
                 on the <span className="font-semibold">same device or cloud environment</span> as the
                 OpenClaw instance, or ensure the claw's URL is reachable from wherever ClawManager is
-                hosted. Without network access the assistant falls back to Mock Mode.
+                hosted. Without network access the assistant falls back to Mock Mode (if enabled).
               </p>
+            </div>
+          </div>
+
+          {/* Mock Mode toggle */}
+          <div className="bg-bg-elevated rounded-xl p-4 border border-border-subtle space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-text-primary">Mock Mode</p>
+                <p className="text-xs text-text-muted mt-0.5">
+                  When <span className="font-semibold">ON</span>, the assistant returns built-in
+                  placeholder responses if no live claw is reachable.{' '}
+                  When <span className="font-semibold">OFF</span>, only real claw responses are used —
+                  the assistant will return an error if no live claw is available.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={form.mock_enabled}
+                onClick={() => setForm(prev => ({ ...prev, mock_enabled: !prev.mock_enabled }))}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
+                  form.mock_enabled ? 'bg-accent-purple' : 'bg-bg-card border border-border'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ${
+                    form.mock_enabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
             </div>
           </div>
 
@@ -195,7 +227,16 @@ const SettingsPage: FC = () => {
               {[
                 {
                   label: 'Mode',
-                  value: config?.claw_id ? '🟢 Live (Appointed Claw)' : '🟡 Mock Mode',
+                  value: config?.claw_id
+                    ? '🟢 Live (Appointed Claw)'
+                    : config?.mock_enabled
+                    ? '🟡 Mock Mode'
+                    : '🔴 No Assistant (Mock Off)',
+                },
+                {
+                  label: 'Mock Mode',
+                  value: config?.mock_enabled ? '✅ Enabled' : '❌ Disabled',
+                  extra: null,
                 },
                 {
                   label: 'Appointed Claw',

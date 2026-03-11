@@ -135,7 +135,13 @@ def seed_database():
             ]
             db.add_all(templates)
 
-        if db.query(Claw).count() == 0:
+        # Seed demo claws/workspaces/skills/memories only when SEED_DEMO_DATA is
+        # enabled (default true for backward compatibility).  Set the environment
+        # variable to "false" or "0" on a fresh deployment to start with a clean
+        # database that contains no placeholder data.
+        seed_demo = os.environ.get("SEED_DEMO_DATA", "true").lower() not in ("false", "0", "no")
+
+        if seed_demo and db.query(Claw).count() == 0:
             claws = [
                 Claw(
                     name="Alpha Claw",
@@ -229,7 +235,7 @@ def seed_database():
             db.add_all(memories)
 
         if db.query(AssistantConfig).count() == 0:
-            db.add(AssistantConfig(name="Nano Claw", claw_id=None))
+            db.add(AssistantConfig(name="Nano Claw", claw_id=None, mock_enabled=True))
 
         db.commit()
         logger.info("Database seeded successfully")
@@ -280,6 +286,14 @@ async def lifespan(app: FastAPI):
                     conn.execute(text("ALTER TABLE memories ADD COLUMN updated_at DATETIME"))
                     logger.info("Added updated_at column to memories")
                 conn.commit()
+        # Migrate: add mock_enabled to assistant_config if missing
+        if "assistant_config" in inspector.get_table_names():
+            ac_cols = [c["name"] for c in inspector.get_columns("assistant_config")]
+            if "mock_enabled" not in ac_cols:
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE assistant_config ADD COLUMN mock_enabled BOOLEAN DEFAULT 1"))
+                    conn.commit()
+                logger.info("Added mock_enabled column to assistant_config")
     except Exception as e:
         logger.warning(f"Column migration skipped: {e}")
 
@@ -524,6 +538,7 @@ class AssistantSkillCreate(BaseModel):
 class AssistantConfigUpdate(BaseModel):
     claw_id: Optional[int] = None
     name: Optional[str] = None
+    mock_enabled: Optional[bool] = None
 
 
 class ChatMessage(BaseModel):
@@ -1576,6 +1591,7 @@ def _config_response(config: AssistantConfig) -> dict:
         "claw_id": config.claw_id,
         "claw_name": claw.name if claw else None,
         "claw_status": claw.status if claw else None,
+        "mock_enabled": config.mock_enabled if config.mock_enabled is not None else True,
     }
 
 
@@ -1584,6 +1600,7 @@ async def assistant_chat(body: ChatMessage, db: Session = Depends(get_db)):
     import re
     global _mock_counter
     config = db.query(AssistantConfig).first()
+    mock_enabled = config.mock_enabled if (config and config.mock_enabled is not None) else True
     appointed_claw = None
     if config and config.claw_id:
         appointed_claw = db.query(Claw).filter(Claw.id == config.claw_id).first()
@@ -1625,6 +1642,16 @@ async def assistant_chat(body: ChatMessage, db: Session = Depends(get_db)):
             logger.warning(f"Assistant proxy failed for claw '{appointed_claw.name}': {e}")
 
     if reply is None:
+        if not mock_enabled:
+            # Mock mode is disabled — refuse to return fake responses.
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No live assistant available. "
+                    "Please appoint a reachable claw in Settings, "
+                    "or re-enable Mock Mode to use built-in responses."
+                ),
+            )
         reply = MOCK_RESPONSES[_mock_counter % len(MOCK_RESPONSES)]
         _mock_counter += 1
 

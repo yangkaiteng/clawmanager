@@ -41,6 +41,8 @@ const NanoClawAssistant: FC = () => {
 
   const assistantLabel = config?.claw_name
     ? `${config.claw_name} • ${config.claw_status ?? 'unknown'}`
+    : config?.mock_enabled === false
+    ? 'No Assistant'
     : 'Mock Mode'
 
   const send = async () => {
@@ -126,6 +128,8 @@ const NanoClawAssistant: FC = () => {
                         config.claw_status === 'online' ? 'text-accent-success' :
                         config.claw_status === 'offline' ? 'text-accent-danger' : 'text-text-muted'
                       }>{assistantLabel}</span>
+                    ) : config?.mock_enabled === false ? (
+                      <span className="text-accent-danger">No Assistant</span>
                     ) : (
                       'Mock Mode'
                     )}

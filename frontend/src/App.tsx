@@ -90,6 +90,7 @@ function FirstLaunchGuard({ children }: { children: React.ReactNode }) {
               <p className="text-xs text-accent-warning border border-accent-warning/30 bg-accent-warning/5 rounded-xl px-3 py-2">
                 ⚠️ Without an appointed AI assistant, the chat panel runs in <strong>Mock Mode</strong> with
                 pre-set responses only. Full functionality requires a live OpenClaw connection.
+                Mock Mode can be disabled in Settings to prevent placeholder responses.
               </p>
             </div>
 
