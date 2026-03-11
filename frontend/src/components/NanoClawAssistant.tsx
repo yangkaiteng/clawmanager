@@ -63,10 +63,14 @@ const NanoClawAssistant: FC = () => {
         ...prev,
         { role: 'assistant', content: res.reply, timestamp: new Date() },
       ])
-    } catch {
+    } catch (err) {
       setMessages(prev => [
         ...prev,
-        { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.', timestamp: new Date() },
+        {
+          role: 'assistant',
+          content: err instanceof Error ? err.message : 'Sorry, I encountered an error. Please try again.',
+          timestamp: new Date(),
+        },
       ])
     } finally {
       setLoading(false)

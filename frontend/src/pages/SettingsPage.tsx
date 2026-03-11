@@ -207,8 +207,8 @@ const SettingsPage: FC = () => {
                 role="switch"
                 aria-checked={form.mock_enabled}
                 onClick={() => setForm(prev => ({ ...prev, mock_enabled: !prev.mock_enabled }))}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
-                  form.mock_enabled ? 'bg-accent-purple' : 'bg-bg-card border border-border'
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 focus:outline-none ${
+                  form.mock_enabled ? 'bg-accent-purple border-transparent' : 'bg-bg-card border-border'
                 }`}
               >
                 <span
@@ -236,7 +236,6 @@ const SettingsPage: FC = () => {
                 {
                   label: 'Mock Mode',
                   value: config?.mock_enabled ? '✅ Enabled' : '❌ Disabled',
-                  extra: null,
                 },
                 {
                   label: 'Appointed Claw',
