@@ -63,6 +63,7 @@ export interface AssistantConfig {
   claw_id: number | null
   claw_name: string | null
   claw_status: string | null
+  mock_enabled: boolean
 }
 
 export interface Stats {
